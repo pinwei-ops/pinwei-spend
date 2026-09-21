@@ -6,7 +6,7 @@
     user: null,
     ref: null,
     limits: null,
-    views: { mine: [], to_approve: [], to_pay: [] },
+    views: { mine: [], to_approve: [], to_pay: [], to_check: [] },
     detail: null,   // last expense opened, reused by the edit form
   };
 
@@ -211,7 +211,7 @@
     // Tabs by role; queues come first because they are someone's job.
     const tabDefs = [];
     if (PAYER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'pay', label: 'To pay', count: state.views.to_pay.length });
-    if (APPROVER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'approve', label: 'To approve', count: state.views.to_approve.length });
+    if (APPROVER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'approve', label: 'To approve', count: state.views.to_approve.length + (state.views.to_check || []).length });
     tabDefs.push({ key: 'mine', label: tabDefs.length ? 'Mine' : 'My expenses', count: byStatus(['NEEDS_INFO']).length });
     if (ALL_VIEW_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'all', label: 'All', count: 0 });
     if (!homeTab || !tabDefs.some(function (t) { return t.key === homeTab; })) {
@@ -226,13 +226,17 @@
     if (homeTab === 'all') {
       body = allView();
     } else if (homeTab === 'approve') {
-      body = [section('Waiting for your decision', state.views.to_approve, { showEmpty: true, empty: 'Nothing waiting for you.', showSubmitter: true })];
+      body = [
+        section('Waiting for your decision', state.views.to_approve, { showEmpty: true, empty: 'Nothing waiting for you.', showSubmitter: true }),
+        section('Cash payments to post-check', state.views.to_check || [], { showSubmitter: true }),
+      ];
     } else if (homeTab === 'pay') {
       const q = state.views.to_pay;
       const total = q.reduce(function (sum, e) { return sum + (Number(e.balance_due) || 0); }, 0);
       body = [
         q.length ? h('p.queue-total', { text: q.length + ' to pay · ' + fmtMoney(total) + ' outstanding' }) : null,
         section('Approved, waiting for payment', q, { showEmpty: true, empty: 'Nothing to pay.', showSubmitter: true }),
+        q.length ? h('button.btn', { type: 'button', text: '⬇  Export list for bank transfers (CSV)', onclick: exportToPay }) : null,
       ];
     } else {
       body = [
@@ -338,6 +342,7 @@
   const ACTION_LABEL = {
     SUBMIT: 'Submitted', SUBMIT_DIRECT_TO_ACCOUNTANT: 'Submitted to accountant', APPROVE: 'Approved',
     REJECT: 'Rejected', REQUEST_INFO: 'Asked for more info', RESUBMIT: 'Resubmitted',
+    EDIT: 'Edited', EDIT_NEEDS_REAPPROVAL: 'Edited — needs approval again', CANCEL: 'Cancelled', POST_CHECK: 'Cash payment post-checked',
     PAY_FULL: 'Paid in full', PAY_PARTIAL: 'Partial payment',
   };
 
@@ -349,7 +354,7 @@
       if (last && last.at === t.at && last.action === t.action) { if (t.field) last.fields.push(t); return; }
       lines.push({ at: t.at, by: t.by, action: t.action, fields: t.field ? [t] : [] });
     });
-    const isReason = function (f) { return f.field === 'info_request' || f.field === 'rejection_reason' || f.field === 'payment'; };
+    const isReason = function (f) { return ['info_request', 'rejection_reason', 'payment', 'cancel_reason', 'post_check_note'].indexOf(f.field) !== -1; };
     return h('ol.timeline', {}, lines.map(function (l) {
       const note = l.fields.filter(isReason).map(function (f) {
         if (f.field !== 'payment') return '"' + f.value + '"';
@@ -398,7 +403,9 @@
         row('Submitted by', e.submitted_by_name + ' · ' + e.outlet_code),
         row('Submitted', fmtDateTime(e.created_at)),
         row('Sent to', e.send_to_name),
-        row('Supplier', e.supplier ? e.supplier.name + (e.supplier.tax_id ? ' · Tax ID ' + e.supplier.tax_id : '') : ''),
+        row('Supplier', e.supplier ? e.supplier.name + (e.supplier.tax_id ? ' · Tax ID ' + e.supplier.tax_id : '') + (e.supplier.status === 'PENDING' ? ' · NOT APPROVED YET' : '') : ''),
+        row('Who gets paid', e.payee_type ? label('payee_type', e.payee_type) : ''),
+        row('Refund due', e.status === 'CANCELLED' && e.refund_amount ? fmtMoney(e.refund_amount) : ''),
         row('Payee', [e.payee_name, e.payee_bank, e.payee_account_masked].filter(Boolean).join(' · ')),
         row('Description', e.description),
         row('Due date', fmtDate(e.due_date)),
@@ -413,12 +420,17 @@
         row('Balance due', e.status === 'PARTIAL' ? fmtMoney(e.balance_due) : ''),
         row('ID', e.expense_id),
       ]),
+      e.can.approveSupplier ? supplierApprovalCard(e) : null,
+      e.pay_blocked ? h('div.flag', { text: '⛔ ' + e.pay_blocked }) : null,
       e.pay_to && e.can.pay ? payToCard(e.pay_to) : null,
       e.can.pay ? paymentPanel(e) : null,
+      e.can.postCheck ? postCheckPanel(e) : null,
       e.payments && e.payments.length ? h('h2.section-title', { text: 'Payments' }) : null,
       e.payments && e.payments.length ? h('div.list', {}, e.payments.map(paymentCard)) : null,
       e.can.decide ? decisionPanel(e) : null,
-      e.can.resubmit ? h('a.btn.btn-primary.btn-big', { href: '#/edit/' + encodeURIComponent(e.expense_id) }, ['Edit and resubmit']) : null,
+      e.can.edit ? h('a.btn' + (e.status === 'NEEDS_INFO' ? '.btn-primary.btn-big' : ''), { href: '#/edit/' + encodeURIComponent(e.expense_id) },
+        [e.status === 'NEEDS_INFO' ? 'Edit and resubmit' : 'Edit']) : null,
+      e.can.cancel ? cancelPanel(e) : null,
       h('h2.section-title', { text: 'History' }),
       timelineView(e.timeline),
     ]), silent);
@@ -489,6 +501,116 @@
     }
     showMain();
     return panel;
+  }
+
+  // ------------------------------------------------------- lifecycle panels
+
+  /** Small reusable "reason + confirm" panel. */
+  function confirmPanel(opts) {
+    const panel = h('div.decide');
+    const box = h('textarea.input', { rows: 2, placeholder: opts.placeholder });
+    const err = h('p.error', { hidden: true });
+    function collapsed() {
+      panel.textContent = '';
+      panel.appendChild(h('button.btn' + (opts.danger ? '.btn-danger' : ''), { type: 'button', text: opts.open, onclick: expanded }));
+    }
+    function expanded() {
+      panel.textContent = '';
+      if (opts.intro) panel.appendChild(h('p.confirm-text', { text: opts.intro }));
+      panel.appendChild(h('label.label', { text: opts.label }));
+      panel.appendChild(box);
+      panel.appendChild(err);
+      const go2 = h('button.btn' + (opts.danger ? '.btn-danger' : '.btn-approve'), { type: 'button', text: opts.confirm });
+      go2.addEventListener('click', async function () {
+        const text = box.value.trim();
+        if (opts.required && !text) { err.textContent = 'Please write a reason.'; err.hidden = false; return; }
+        go2.disabled = true;
+        try { await opts.run(text); } catch (ex) { err.textContent = ex.message; err.hidden = false; go2.disabled = false; }
+      });
+      panel.appendChild(h('div.row', {}, [h('button.btn', { type: 'button', text: 'Back', onclick: collapsed }), go2]));
+      box.focus();
+    }
+    if (opts.startOpen) expanded(); else collapsed();
+    return panel;
+  }
+
+  function afterAction(res, message) {
+    ['to_approve', 'to_pay', 'to_check'].forEach(function (v) { removeFrom(v, res.expense.expense_id); });
+    if (res.expense.submitted_by === state.user.userId) upsert('mine', res.expense);
+    state.detail = null;
+    toast(message, 'ok');
+    go('/');
+  }
+
+  function cancelPanel(e) {
+    const paid = Number(e.amount_paid) || 0;
+    return confirmPanel({
+      open: 'Cancel this expense', danger: true, required: true,
+      label: 'Why is it cancelled? (required)', placeholder: 'e.g. order cancelled by the supplier',
+      intro: paid ? fmtMoney(paid) + ' was already paid — it will be recorded as a refund to collect.' : '',
+      confirm: 'Cancel expense',
+      run: async function (reason) {
+        const res = await Api.call('cancelExpense', { id: e.expense_id, reason: reason });
+        afterAction(res, 'Cancelled ' + e.expense_id + (res.refund ? ' · refund due ' + fmtMoney(res.refund) : ''));
+      },
+    });
+  }
+
+  function postCheckPanel(e) {
+    return confirmPanel({
+      open: 'Confirm cash payment', startOpen: true,
+      intro: 'Paid in cash: ' + fmtMoney(e.amount_paid) + '. Confirm the money went out and the goods or service arrived.',
+      label: 'Note (optional)', placeholder: 'e.g. receipt matches, goods received',
+      confirm: 'Confirm and close',
+      run: async function (note) {
+        const res = await Api.call('postCheck', { id: e.expense_id, note: note });
+        afterAction(res, 'Closed ' + e.expense_id);
+      },
+    });
+  }
+
+  function supplierApprovalCard(e) {
+    const s = e.supplier;
+    const btn = h('button.btn.btn-approve', { type: 'button', text: 'Approve supplier' });
+    btn.addEventListener('click', async function () {
+      btn.disabled = true;
+      try {
+        await Api.call('approveSupplier', { supplier_id: s.supplier_id });
+        toast('Supplier approved', 'ok');
+        renderExpense(e.expense_id);
+      } catch (ex) { toast(ex.message); btn.disabled = false; }
+    });
+    return h('div.card.payto', {}, [
+      h('h2.section-title', { text: 'New supplier — check before approving' }),
+      h('div.payto-name', { text: s.name }),
+      h('p.hint', { text: (s.tax_id ? 'Tax ID ' + s.tax_id + ' · ' : 'No tax ID · ') + (s.bank || 'no bank account given') }),
+      btn,
+    ]);
+  }
+
+  /** CSV for preparing bank transfers; UTF-8 BOM so Excel shows Vietnamese names correctly. */
+  async function exportToPay(ev) {
+    const btn = ev.target;
+    btn.disabled = true;
+    try {
+      const res = await Api.call('exportToPay');
+      const cell = function (v) { const t = String(v === null || v === undefined ? '' : v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+      // Account numbers as ="..." so Excel keeps leading zeros.
+      const accIdx = res.columns.indexOf('account');
+      const lines = [res.columns.join(',')].concat(res.rows.map(function (r) {
+        return r.map(function (v, i) { return i === accIdx && v ? '="' + v + '"' : cell(v); }).join(',');
+      }));
+      const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const a = h('a', { href: URL.createObjectURL(blob), download: 'pinwei-to-pay-' + todayVN() + '.csv' });
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      toast(res.rows.length + ' rows exported');
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   // --------------------------------------------------------------- payments
@@ -641,7 +763,8 @@
 
   // ------------------------------------------------------------------- form
 
-  const DRAFT_FIELDS = ['request_type', 'amount_total', 'expense_category', 'send_to', 'description', 'no_doc_reason', 'payee_type',
+  const NEW_SUPPLIER = '__new__';
+  const DRAFT_FIELDS = ['new_supplier_name', 'new_supplier_tax_id', 'new_supplier_bank_name', 'new_supplier_bank_account', 'request_type', 'amount_total', 'expense_category', 'send_to', 'description', 'no_doc_reason', 'payee_type',
     'outlet_code', 'supplier_id', 'document_type', 'due_date', 'invoice_no', 'invoice_date', 'is_red_invoice',
     'amount_before_vat', 'vat_amount', 'payment_method', 'payee_name', 'payee_account', 'payee_bank'];
 
@@ -660,7 +783,7 @@
         return;
       }
     }
-    if (!e.can.resubmit || !e.editable) { go('/expense/' + encodeURIComponent(id)); return; }
+    if (!e.can.edit || !e.editable) { go('/expense/' + encodeURIComponent(id)); return; }
     renderForm(e);
   }
 
@@ -833,7 +956,35 @@
 
     // --- who gets paid (supplier / someone else / me)
     const payeeHint = h('p.hint');
-    const supplierField = field('supplier_id', 'Supplier', select('supplier_id', state.ref.suppliers, 'Not listed / none'));
+    const supplierSelect = select('supplier_id', state.ref.suppliers.concat([{ value: NEW_SUPPLIER, label: '+ Add a new supplier…' }]), 'Not listed / none');
+    const newSupplierBox = h('div.payee-other', { hidden: true }, [
+      h('p.hint', { text: 'New suppliers need an owner\u2019s approval before the accountant can pay into their account.' }),
+      field('new_supplier_name', 'Supplier name', input('new_supplier_name', { autocomplete: 'off' })),
+      field('new_supplier_tax_id', 'Tax ID (MST)', input('new_supplier_tax_id', { inputmode: 'numeric', autocomplete: 'off' })),
+      field('new_supplier_bank_name', 'Bank', input('new_supplier_bank_name', { autocomplete: 'off' })),
+      field('new_supplier_bank_account', 'Account number', input('new_supplier_bank_account', { inputmode: 'numeric', autocomplete: 'off' })),
+    ]);
+    supplierSelect.addEventListener('change', function () { newSupplierBox.hidden = supplierSelect.value !== NEW_SUPPLIER; });
+    newSupplierBox.hidden = values.supplier_id !== NEW_SUPPLIER;
+    const supplierField = field('supplier_id', 'Supplier', h('div', {}, [supplierSelect, newSupplierBox]));
+
+    /** Creates the typed-in supplier first, then the expense can point at it. */
+    async function createSupplierFromForm() {
+      try {
+        const res = await Api.call('createSupplier', {
+          name: values.new_supplier_name, tax_id: values.new_supplier_tax_id,
+          bank_name: values.new_supplier_bank_name, bank_account: values.new_supplier_bank_account,
+          default_category: values.expense_category,
+        });
+        state.ref.suppliers.push(res.supplier);
+        values.supplier_id = res.supplier.value;
+      } catch (err) {
+        const dup = err.details && err.details.find(function (d) { return d.existingId; });
+        if (dup) { values.supplier_id = dup.existingId; }  // it already exists: use it
+        else throw err;
+      }
+      saveDraft(values);
+    }
     const otherFields = h('div.payee-other', {}, [
       field('payee_name', 'Their name', input('payee_name', { autocomplete: 'off' })),
       field('payee_account', 'Their account number', input('payee_account', { inputmode: 'numeric', autocomplete: 'off' })),
@@ -916,12 +1067,20 @@
         if (!attachment && keptAttachment) payload.no_doc_reason = '';
         payload.confirmWarnings = Boolean(confirmWarnings);
         if (editing) { payload.id = existing.expense_id; payload.removeAttachment = removedAttachment && !attachment; }
-        const res = await Api.call(editing ? 'resubmitExpense' : 'submitExpense', payload);
+        if (values.supplier_id === NEW_SUPPLIER) {
+          submitBtn.textContent = 'Adding supplier…';
+          await createSupplierFromForm();
+          payload.supplier_id = values.supplier_id;
+        }
+        const res = await Api.call(editing ? 'editExpense' : 'submitExpense', payload);
         if (!res.saved) { showWarnings(res.warnings); return; }
         if (!editing) clearDraft();
         state.detail = null;
         upsert('mine', res.expense);
-        toast((editing ? 'Resubmitted ' : 'Submitted ') + res.expense.expense_id, 'ok');
+        toast(!editing ? 'Submitted ' + res.expense.expense_id
+          : res.action === 'RESUBMIT' ? 'Resubmitted ' + res.expense.expense_id
+            : res.action === 'EDIT_NEEDS_REAPPROVAL' ? 'Saved — ' + res.expense.expense_id + ' goes back for approval'
+              : 'Saved ' + res.expense.expense_id, 'ok');
         go('/');
       } catch (err) {
         if (err.code === 'VALIDATION' && err.details.length) {
@@ -953,7 +1112,9 @@
 
     const form = h('form.form', { novalidate: true, onsubmit: function (ev) { ev.preventDefault(); submit(false); } }, [
       h('a.back', { href: editing ? '#/expense/' + encodeURIComponent(existing.expense_id) : '#/', text: '← Cancel' }),
-      h('h1.title', { text: editing ? 'Edit and resubmit ' + existing.expense_id : 'New expense' }),
+      h('h1.title', { text: editing ? (existing.status === 'NEEDS_INFO' ? 'Edit and resubmit ' : 'Edit ') + existing.expense_id : 'New expense' }),
+      editing && existing.status === 'APPROVED' && existing.send_to !== 'ACCOUNTANT'
+        ? h('div.item-note', { text: 'Already approved. Changing the amount, the supplier or who gets paid sends it back for approval.' }) : null,
       editing && existing.info_request ? h('div.item-note', { text: 'Requested: ' + existing.info_request }) : null,
       typeField, fileField, noDocField, amountField, catField, payeeBlock, sendField, descField, more,
       formErrors, warnBox,
