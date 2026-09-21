@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pin Wei Spend</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <style>
+    :root { --bg: #f7f7f5; --fg: #1d1d1b; --muted: #6b6b66; --card: #fff; --line: #e3e3de;
+            --ok: #1f7a3a; --ok-bg: #e7f5ec; --fail: #b3261e; --fail-bg: #fdecea; --pend: #7a5c00; --pend-bg: #fff6d6; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #151514; --fg: #ecece8; --muted: #a3a39c; --card: #1f1f1d; --line: #33332f;
+              --ok: #7fd49a; --ok-bg: #16301f; --fail: #ff9a91; --fail-bg: #3a1a17; --pend: #f0cf6b; --pend-bg: #33290c; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg);
+           font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { max-width: 520px; margin: 0 auto; padding: 24px 16px; }
+    h1 { font-size: 1.35rem; margin: 0 0 4px; }
+    p.sub { color: var(--muted); margin: 0 0 20px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    #signin { min-height: 44px; }
+    .result { padding: 12px; border-radius: 8px; overflow-wrap: anywhere; }
+    .result.ok { background: var(--ok-bg); color: var(--ok); }
+    .result.fail { background: var(--fail-bg); color: var(--fail); }
+    .result.pending, .result.idle { background: var(--pend-bg); color: var(--pend); }
+    #env { font-size: .85rem; color: var(--muted); }
+    #env .ua { overflow-wrap: anywhere; margin-top: 6px; }
+    code { font-size: .95em; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Pin Wei Spend — architecture check</h1>
+    <p class="sub">Step 0: Google sign-in → Apps Script → verified email.</p>
+    <div class="card">
+      <div id="signin"></div>
+    </div>
+    <div class="card">
+      <div id="result" class="result idle">Loading…</div>
+    </div>
+    <div class="card" id="env"></div>
+  </main>
+</body>
+</html>
