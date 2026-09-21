@@ -1,0 +1,33 @@
+# External dead-man switch for the Apps Script backend.
+# The backend's own daily health check can't report its own death, so this job
+# asks it whether a *triggered* health run happened today (Vietnam time) and
+# whether it passed. If not, the job fails and GitHub emails the repo owner.
+name: Backend health
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 10:00 Asia/Ho_Chi_Minh, after the 07:30 health run
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask backend for today's health status
+        env:
+          API_URL: https://script.google.com/macros/s/AKfycbwBmfuxhgyGXvothuCKwsVrRA4FRQJfUe6l_oEbf5O2oc-UXvl0vv5Gzk6gTBuIUcSU/exec
+          HEALTH_CHECK_KEY: ${{ secrets.HEALTH_CHECK_KEY }}
+        run: |
+          if [ -z "$HEALTH_CHECK_KEY" ]; then echo "::error::Repo secret HEALTH_CHECK_KEY is not set"; exit 1; fi
+          body=$(jq -n --arg key "$HEALTH_CHECK_KEY" '{action:"health", payload:{key:$key}}')
+          response=$(curl -sS -L --max-time 60 -H "Content-Type: text/plain" -d "$body" "$API_URL") || {
+            echo "::error::Backend unreachable"; exit 1; }
+          echo "$response" | jq . || { echo "::error::Backend returned non-JSON: $response"; exit 1; }
+          ok=$(echo "$response" | jq -r '.ok')
+          ran=$(echo "$response" | jq -r '.data.ranToday')
+          status=$(echo "$response" | jq -r '.data.lastStatus')
+          if [ "$ok" != "true" ]; then echo "::error::Backend error: $(echo "$response" | jq -r '.error')"; exit 1; fi
+          if [ "$ran" != "true" ]; then echo "::error::No triggered health run today (last: $(echo "$response" | jq -r '.data.lastRunAt'))"; exit 1; fi
+          if [ "$status" != "OK" ]; then echo "::error::Today's health run reported $status"; exit 1; fi
+          echo "Healthy."
