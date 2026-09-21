@@ -175,3 +175,13 @@ details.more[open] > .field, details.more[open] > .grid2, details.more[open] > .
 .viewer { position: fixed; inset: 0; z-index: 40; overflow: auto; background: rgba(0,0,0,.92); touch-action: pinch-zoom; }
 .viewer img { display: block; max-width: none; width: 100%; min-height: 100%; object-fit: contain; }
 .viewer-close { position: fixed; top: max(12px, env(safe-area-inset-top)); right: 12px; z-index: 41; padding: 10px 14px; border: 0; border-radius: 999px; background: rgba(255,255,255,.9); color: #000; font-weight: 600; }
+
+/* --- step 6: payments --- */
+.queue-total { margin: 0 0 4px; color: var(--muted); font-weight: 600; }
+.payto { margin-top: 12px; }
+.payto .section-title { margin: 0 0 6px; }
+.payto-name { font-weight: 700; }
+.payto-acc { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+.proof-thumb { display: block; width: 96px; height: 96px; margin-top: 10px; object-fit: cover; border-radius: 8px; cursor: zoom-in; }
+details.more-inline > summary { min-height: 40px; display: flex; align-items: center; color: var(--muted); cursor: pointer; }
+details.more-inline[open] > .input { margin-top: 6px; }

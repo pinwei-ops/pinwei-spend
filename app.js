@@ -6,7 +6,7 @@
     user: null,
     ref: null,
     limits: null,
-    views: { mine: [], to_approve: [] },
+    views: { mine: [], to_approve: [], to_pay: [] },
     detail: null,   // last expense opened, reused by the edit form
   };
 
@@ -105,6 +105,7 @@
   // ------------------------------------------------------------------- home
 
   const APPROVER_ROLES = ['OUTLET_MANAGER', 'OWNER', 'ADMIN'];
+  const PAYER_ROLES = ['ACCOUNTANT', 'ADMIN'];
   let homeTab = null;
 
   /** Replaces or inserts an expense in a view list (keeps local state fresh without a reload). */
@@ -119,7 +120,7 @@
 
   function expenseCard(e, showSubmitter) {
     return h('a.item', { href: '#/expense/' + encodeURIComponent(e.expense_id) }, [
-      h('div.item-top', {}, [h('span.amount', { text: fmtMoney(e.amount_total) }), statusChip(e.status)]),
+      h('div.item-top', {}, [h('span.amount', { text: fmtMoney(e.status === 'PARTIAL' ? e.balance_due : e.amount_total) + (e.status === 'PARTIAL' ? ' left' : '') }), statusChip(e.status)]),
       h('div.item-mid', { text: categoryLabel(e.expense_category) + (e.supplier_name ? ' · ' + e.supplier_name : e.description ? ' · ' + e.description : '') }),
       h('div.item-meta', {}, [
         h('span', { text: e.expense_id }),
@@ -142,28 +143,41 @@
   }
 
   function renderHome() {
-    const isApprover = APPROVER_ROLES.indexOf(state.user.role) !== -1;
-    const toApprove = state.views.to_approve;
-    if (!homeTab) homeTab = isApprover && toApprove.length ? 'approve' : 'mine';
-
+    const role = state.user.role;
     const mine = state.views.mine;
     const byStatus = function (list) { return mine.filter(function (e) { return list.indexOf(e.status) !== -1; }); };
-    const needInfo = byStatus(['NEEDS_INFO']).length;
-    const tabs = isApprover ? h('div.tabs', { role: 'tablist' }, [
-      h('button.tab' + (homeTab === 'approve' ? '.on' : ''), { type: 'button', role: 'tab', onclick: function () { homeTab = 'approve'; renderHome(); } },
-        ['To approve', toApprove.length ? h('span.count', { text: String(toApprove.length) }) : null]),
-      h('button.tab' + (homeTab === 'mine' ? '.on' : ''), { type: 'button', role: 'tab', onclick: function () { homeTab = 'mine'; renderHome(); } },
-        ['My expenses', needInfo ? h('span.count', { text: String(needInfo) }) : null]),
-    ]) : null;
 
-    const body = homeTab === 'approve'
-      ? [section('Waiting for your decision', toApprove, { showEmpty: true, empty: 'Nothing waiting for you.', showSubmitter: true })]
-      : [
+    // Tabs by role; queues come first because they are someone's job.
+    const tabDefs = [];
+    if (PAYER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'pay', label: 'To pay', count: state.views.to_pay.length });
+    if (APPROVER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'approve', label: 'To approve', count: state.views.to_approve.length });
+    tabDefs.push({ key: 'mine', label: 'My expenses', count: byStatus(['NEEDS_INFO']).length });
+    if (!homeTab || !tabDefs.some(function (t) { return t.key === homeTab; })) {
+      homeTab = (tabDefs.find(function (t) { return t.key !== 'mine' && t.count; }) || { key: 'mine' }).key;
+    }
+    const tabs = tabDefs.length > 1 ? h('div.tabs', { role: 'tablist', style: 'grid-template-columns: repeat(' + tabDefs.length + ', 1fr)' }, tabDefs.map(function (t) {
+      return h('button.tab' + (homeTab === t.key ? '.on' : ''), { type: 'button', role: 'tab', onclick: function () { homeTab = t.key; renderHome(); } },
+        [t.label, t.count ? h('span.count', { text: String(t.count) }) : null]);
+    })) : null;
+
+    let body;
+    if (homeTab === 'approve') {
+      body = [section('Waiting for your decision', state.views.to_approve, { showEmpty: true, empty: 'Nothing waiting for you.', showSubmitter: true })];
+    } else if (homeTab === 'pay') {
+      const q = state.views.to_pay;
+      const total = q.reduce(function (sum, e) { return sum + (Number(e.balance_due) || 0); }, 0);
+      body = [
+        q.length ? h('p.queue-total', { text: q.length + ' to pay · ' + fmtMoney(total) + ' outstanding' }) : null,
+        section('Approved, waiting for payment', q, { showEmpty: true, empty: 'Nothing to pay.', showSubmitter: true }),
+      ];
+    } else {
+      body = [
         h('a.btn.btn-primary.btn-big', { href: '#/new' }, ['+ New expense']),
         section('Needs your info', byStatus(['NEEDS_INFO'])),
         section('In progress', byStatus(['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'PARTIAL']), { showEmpty: true, empty: 'Nothing in progress.' }),
         section('Done', byStatus(['PAID', 'CLOSED', 'REJECTED', 'CANCELLED']), { collapsed: true }),
       ];
+    }
     mount(page([tabs].concat(body)));
   }
 
@@ -203,6 +217,7 @@
   const ACTION_LABEL = {
     SUBMIT: 'Submitted', SUBMIT_DIRECT_TO_ACCOUNTANT: 'Submitted to accountant', APPROVE: 'Approved',
     REJECT: 'Rejected', REQUEST_INFO: 'Asked for more info', RESUBMIT: 'Resubmitted',
+    PAY_FULL: 'Paid in full', PAY_PARTIAL: 'Partial payment',
   };
 
   function timelineView(items) {
@@ -213,9 +228,13 @@
       if (last && last.at === t.at && last.action === t.action) { if (t.field) last.fields.push(t); return; }
       lines.push({ at: t.at, by: t.by, action: t.action, fields: t.field ? [t] : [] });
     });
-    const isReason = function (f) { return f.field === 'info_request' || f.field === 'rejection_reason'; };
+    const isReason = function (f) { return f.field === 'info_request' || f.field === 'rejection_reason' || f.field === 'payment'; };
     return h('ol.timeline', {}, lines.map(function (l) {
-      const note = l.fields.filter(isReason).map(function (f) { return '"' + f.value + '"'; }).join(' ');
+      const note = l.fields.filter(isReason).map(function (f) {
+        if (f.field !== 'payment') return '"' + f.value + '"';
+        const parts = String(f.value).split(' ');   // "PAY-0001 500000 FULL"
+        return parts[0] + ' · ' + fmtMoney(parts[1]);
+      }).join(' ');
       const changed = l.fields.filter(function (f) { return !isReason(f); }).map(function (f) { return f.field.replace(/_/g, ' '); }).join(', ');
       return h('li', {}, [
         h('span.tl-what', { text: (ACTION_LABEL[l.action] || l.action) + ' · ' + l.by }),
@@ -259,12 +278,17 @@
         row('Invoice', [e.invoice_no, fmtDate(e.invoice_date), e.is_red_invoice === true ? 'VAT red invoice' : ''].filter(Boolean).join(' · ')),
         row('Before VAT', hasVat ? fmtMoney(e.amount_before_vat) + ' + VAT ' + fmtMoney(e.vat_amount) : ''),
         row('Payment method', e.payment_method ? label('payment_method', e.payment_method) : ''),
-        row('Info requested', e.info_request),
+        row(e.status === 'NEEDS_INFO' ? 'Info requested' : 'Last info request', e.info_request),
         row('Rejection reason', e.rejection_reason),
-        row('Decided by', e.approver_name),
+        row('Decided by', ['APPROVED', 'PARTIAL', 'PAID', 'CLOSED', 'REJECTED', 'NEEDS_INFO'].indexOf(e.status) !== -1 ? e.approver_name : ''),
+        row('Paid so far', Number(e.amount_paid) ? fmtMoney(e.amount_paid) : ''),
         row('Balance due', e.status === 'PARTIAL' ? fmtMoney(e.balance_due) : ''),
         row('ID', e.expense_id),
       ]),
+      e.pay_to && e.can.pay ? payToCard(e.pay_to) : null,
+      e.can.pay ? paymentPanel(e) : null,
+      e.payments && e.payments.length ? h('h2.section-title', { text: 'Payments' }) : null,
+      e.payments && e.payments.length ? h('div.list', {}, e.payments.map(paymentCard)) : null,
       e.can.decide ? decisionPanel(e) : null,
       e.can.resubmit ? h('a.btn.btn-primary.btn-big', { href: '#/edit/' + encodeURIComponent(e.expense_id) }, ['Edit and resubmit']) : null,
       h('h2.section-title', { text: 'History' }),
@@ -337,6 +361,154 @@
     }
     showMain();
     return panel;
+  }
+
+  // --------------------------------------------------------------- payments
+
+  function todayVN() {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date()); // yyyy-mm-dd
+  }
+
+  function payToCard(p) {
+    const copyBtn = p.account ? h('button.link', { type: 'button', text: 'Copy', onclick: function () {
+      navigator.clipboard.writeText(p.account).then(function () { toast('Account number copied'); }, function () { toast(p.account); });
+    } }) : null;
+    return h('div.card.payto', {}, [
+      h('h2.section-title', { text: 'Pay to' }),
+      h('div.payto-name', { text: p.name || '(no name given)' }),
+      p.account
+        ? h('div.payto-acc', {}, [h('span', { text: [p.bank, p.account].filter(Boolean).join(' · ') }), copyBtn])
+        : h('p.hint', { text: 'No bank account on file. Ask the submitter, or pay in cash.' }),
+      p.source === 'payee' ? h('p.hint', { text: 'This is the payee given by the submitter, not the supplier\'s registered account.' }) : null,
+    ]);
+  }
+
+  function paymentCard(p) {
+    const proofUrl = p.proof && p.proof.base64 ? URL.createObjectURL(base64ToBlob(p.proof.base64, p.proof.mime)) : null;
+    return h('div.item', {}, [
+      h('div.item-top', {}, [h('span.amount', { text: fmtMoney(p.amount) }), h('span.chip.ok', { text: label('payment_seq', p.payment_seq) })]),
+      h('div.item-meta', {}, [
+        h('span', { text: p.payment_id }),
+        h('span', { text: fmtDate(p.paid_at) }),
+        h('span', { text: label('payment_method', p.payment_method) }),
+        h('span', { text: 'by ' + p.recorded_by_name }),
+        p.source_account ? h('span', { text: 'from ' + p.source_account }) : null,
+      ]),
+      proofUrl && p.proof.mime.indexOf('image/') === 0 ? h('img.proof-thumb', { src: proofUrl, alt: 'Transfer confirmation', onclick: function () { openViewer(proofUrl); } }) : null,
+      proofUrl && p.proof.mime === 'application/pdf' ? h('a.link', { href: proofUrl, target: '_blank', rel: 'noopener', text: 'Open transfer confirmation (PDF)' }) : null,
+    ]);
+  }
+
+  /**
+   * "Mark as paid": amount is prefilled with the balance and the date with
+   * today, so a full payment is just attach proof + one tap (spec: two actions).
+   */
+  function paymentPanel(e) {
+    const balance = Number(e.balance_due) || 0;
+    let amount = balance;
+    let proof = null;
+    let preparing = null;
+    let busy = false;
+
+    const amountInput = h('input.input.money', { inputmode: 'numeric', autocomplete: 'off' });
+    amountInput.value = money.format(balance);
+    const dateInput = h('input.input', { type: 'date', max: todayVN() });
+    dateInput.value = todayVN();
+    const methodSelect = h('select.input', {}, state.ref.enums.filter(function (x) { return x.field === 'payment_method'; })
+      .map(function (x) { return h('option', { value: x.value, text: x.label }); }));
+    methodSelect.value = e.payment_method || 'BANK_TRANSFER';
+    const sourceInput = h('input.input', { autocomplete: 'off', placeholder: 'e.g. VCB-8866 (optional)' });
+    const fileInput = h('input', { type: 'file', accept: 'image/*,application/pdf', hidden: true });
+    const proofBox = h('div.preview');
+    const err = h('p.error', { hidden: true });
+    const btn = h('button.btn.btn-approve.btn-big', { type: 'button' });
+
+    function paintButton() {
+      const partial = amount > 0 && amount < balance;
+      btn.textContent = partial ? 'Record partial payment' : 'Mark as paid';
+      hint.textContent = partial ? 'Balance after this payment: ' + fmtMoney(balance - amount) : '';
+      hint.hidden = !partial;
+    }
+    const hint = h('p.hint', { hidden: true });
+
+    amountInput.addEventListener('input', function () {
+      const digits = amountInput.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '');
+      amountInput.value = digits ? money.format(Number(digits)) : '';
+      amount = Number(digits) || 0;
+      paintButton();
+    });
+
+    function paintProof(status) {
+      proofBox.textContent = '';
+      if (status === 'working') proofBox.appendChild(h('p.hint', { text: 'Preparing photo…' }));
+      if (proof) {
+        proofBox.appendChild(h('div.preview-row', {}, [
+          proof.mime.indexOf('image/') === 0 ? h('img.thumb', { src: 'data:' + proof.mime + ';base64,' + proof.base64, alt: 'Transfer confirmation' }) : h('span.pdf', { text: 'PDF' }),
+          h('div.preview-info', {}, [h('span', { text: proof.name }), h('span.hint', { text: Math.round(proof.sizeAfter / 1024) + ' KB' })]),
+          h('button.link', { type: 'button', text: 'Remove', onclick: function () { proof = null; fileInput.value = ''; paintProof(); } }),
+        ]));
+      }
+    }
+    fileInput.addEventListener('change', function () {
+      const f = fileInput.files[0];
+      if (!f) return;
+      proof = null;
+      err.hidden = true;
+      paintProof('working');
+      preparing = Attachment.prepare(f, state.limits.maxUploadMb)
+        .then(function (a) { proof = a; })
+        .catch(function (ex) { err.textContent = ex.message; err.hidden = false; })
+        .finally(function () { preparing = null; paintProof(); });
+    });
+
+    async function submit() {
+      if (busy) return;
+      err.hidden = true;
+      busy = true;
+      btn.disabled = true;
+      try {
+        if (preparing) { btn.textContent = 'Preparing photo…'; await preparing; }
+        btn.textContent = 'Saving…';
+        const res = await Api.call('recordPayment', {
+          id: e.expense_id,
+          amount: amount,
+          paid_at: dateInput.value,
+          payment_method: methodSelect.value,
+          source_account: sourceInput.value.trim(),
+          file: proof ? { name: proof.name, mime: proof.mime, base64: proof.base64, sha256: proof.sha256 } : null,
+        });
+        if (res.expense.status === 'PAID') removeFrom('to_pay', e.expense_id); else upsert('to_pay', res.expense);
+        if (res.expense.submitted_by === state.user.userId) upsert('mine', res.expense);
+        state.detail = null;
+        toast((res.expense.status === 'PAID' ? 'Paid ' : 'Partial payment recorded: ') + e.expense_id, 'ok');
+        go('/');
+      } catch (ex) {
+        err.textContent = ex.details && ex.details.length ? ex.details.map(function (d) { return d.message; }).join(' ') : ex.message;
+        err.hidden = false;
+      } finally {
+        busy = false;
+        btn.disabled = false;
+        paintButton();
+      }
+    }
+    btn.addEventListener('click', submit);
+    paintButton();
+
+    return h('div.decide', {}, [
+      h('h2.section-title', { text: 'Record payment' }),
+      h('p.hint', { text: 'Transfer the money in your bank app first, then record it here.' }),
+      fileInput,
+      proofBox,
+      h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['📷  Attach transfer confirmation']),
+      h('div.field', {}, [h('label.label', { text: 'Amount paid' }), h('div.money-wrap', {}, [amountInput, h('span.suffix', { text: '₫' })]), hint]),
+      h('div.grid2', {}, [
+        h('div.field', {}, [h('label.label', { text: 'Paid on' }), dateInput]),
+        h('div.field', {}, [h('label.label', { text: 'Method' }), methodSelect]),
+      ]),
+      h('details.more-inline', {}, [h('summary', { text: 'Paid from which account? (optional)' }), sourceInput]),
+      err,
+      btn,
+    ]);
   }
 
   // ------------------------------------------------------------------- form
