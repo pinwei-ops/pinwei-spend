@@ -6,6 +6,7 @@
   <title>Pin Wei Spend</title>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="config.js"></script>
+  <script src="inapp.js"></script>
   <script src="auth.js"></script>
   <style>
     :root { --bg: #f7f7f5; --fg: #1d1d1b; --muted: #6b6b66; --card: #fff; --line: #e3e3de;
@@ -28,6 +29,14 @@
     .result.pending, .result.idle { background: var(--pend-bg); color: var(--pend); }
     #env { font-size: .85rem; color: var(--muted); }
     #env .ua { overflow-wrap: anywhere; margin-top: 6px; }
+    .inapp p { margin: 0 0 12px; }
+    .inapp-title { font-weight: 600; font-size: 1.1rem; }
+    .inapp-hint { color: var(--muted); font-size: .9rem; }
+    .btn { display: block; width: 100%; min-height: 48px; margin: 0 0 10px; padding: 12px 16px; border-radius: 10px;
+           border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; text-align: center;
+           text-decoration: none; cursor: pointer; }
+    .btn-primary { background: #1a73e8; border-color: #1a73e8; color: #fff; font-weight: 600; }
+    .btn-link { border: 0; background: none; color: var(--muted); text-decoration: underline; min-height: 40px; }
     code { font-size: .95em; }
   </style>
 </head>
@@ -37,6 +46,7 @@
     <p class="sub">Step 0: Google sign-in → Apps Script → verified email.</p>
     <div class="card">
       <div id="signin"></div>
+      <div id="escape"></div>
     </div>
     <div class="card">
       <div id="result" class="result idle">Loading…</div>

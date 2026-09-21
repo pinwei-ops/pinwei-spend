@@ -56,6 +56,22 @@
 
   function init() {
     renderEnvironment();
+    const inAppName = window.InApp && InApp.detect();
+    let continued = false;
+    try { continued = Boolean(sessionStorage.getItem('inapp_continue')); } catch (err) { /* private mode */ }
+    if (inAppName && !continued) {
+      $('signin').hidden = true;
+      show('idle', 'Sign-in is blocked in ' + escapeHtml(inAppName) + '.');
+      InApp.renderEscape($('escape'), escapeHtml(inAppName), function () {
+        try { sessionStorage.setItem('inapp_continue', '1'); } catch (err) { /* private mode */ }
+        location.reload();
+      });
+      return;
+    }
+    startSignIn();
+  }
+
+  function startSignIn() {
     if (cfg.CLIENT_ID.indexOf('REPLACE_WITH') === 0 || cfg.API_URL.indexOf('REPLACE_WITH') !== -1) {
       show('fail', 'config.js still has placeholder values.');
       return;
