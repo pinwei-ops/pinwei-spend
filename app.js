@@ -33,7 +33,13 @@
   }
 
   const $app = function () { return document.getElementById('app'); };
-  function mount(node) { const root = $app(); root.textContent = ''; root.appendChild(node); window.scrollTo(0, 0); }
+  function mount(node, keepScroll) {
+    const y = window.scrollY;
+    const root = $app();
+    root.textContent = '';
+    root.appendChild(node);
+    window.scrollTo(0, keepScroll ? y : 0);
+  }
 
   function toast(message, kind) {
     const el = h('div.toast' + (kind ? '.' + kind : ''), { role: 'status', text: message });
@@ -195,7 +201,7 @@
     ]);
   }
 
-  function renderHome() {
+  function renderHome(keepScroll) {
     const role = state.user.role;
     const mine = state.views.mine;
     const byStatus = function (list) { return mine.filter(function (e) { return list.indexOf(e.status) !== -1; }); };
@@ -232,7 +238,11 @@
       ];
     }
     body.push(state.user.telegramLinked ? telegramFooter() : telegramCard());
-    mount(page([tabs].concat(body)));
+    const refreshed = h('p.refresh-line', {}, [
+      'Updated ' + (state.refreshedAt ? state.refreshedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—') + ' · ',
+      h('button.link', { type: 'button', text: 'Refresh', onclick: function () { refreshViews(true); } }),
+    ]);
+    mount(page([tabs, refreshed].concat(body)), keepScroll);
   }
 
   // ----------------------------------------------------------- expense view
@@ -299,21 +309,26 @@
     }));
   }
 
-  async function renderExpense(id) {
+  /** opts.silent: background refresh — no spinner, keep scroll, re-render only if something changed. */
+  async function renderExpense(id, opts) {
+    const silent = Boolean(opts && opts.silent);
     const backLink = function () { return h('a.back', { href: '#/', text: '← Back' }); };
-    mount(page([backLink(), loading()]));
+    if (!silent) mount(page([backLink(), loading()]));
     let e;
     try {
       e = await Api.call('getExpense', { id: id });
     } catch (err) {
-      mount(page([backLink(), h('p.empty', { text: err.message })]));
+      if (!silent) mount(page([backLink(), h('p.empty', { text: err.message })]));
       return;
     }
     if (location.hash !== '#/expense/' + encodeURIComponent(id)) return; // user navigated away meanwhile
+    if (silent && state.detail && state.detail.expense_id === e.expense_id &&
+        state.detail.updated_at === e.updated_at && state.detail.status === e.status) return;
     state.detail = e;
 
     const row = function (k, v) { return v ? h('div.kv', {}, [h('span.k', { text: k }), h('span.v', { text: v })]) : null; };
     const hasVat = e.amount_before_vat !== '' && e.amount_before_vat !== undefined && e.amount_before_vat !== null;
+    if (silent) toast('Updated: ' + label('status', e.status));
     mount(page([
       backLink(),
       attachmentView(e.attachment),
@@ -347,7 +362,7 @@
       e.can.resubmit ? h('a.btn.btn-primary.btn-big', { href: '#/edit/' + encodeURIComponent(e.expense_id) }, ['Edit and resubmit']) : null,
       h('h2.section-title', { text: 'History' }),
       timelineView(e.timeline),
-    ]));
+    ]), silent);
   }
 
   function decisionPanel(e) {
@@ -858,6 +873,52 @@
     mount(page([form]));
   }
 
+  // ---------------------------------------------------------- auto refresh
+  // Apps Script can't push to the browser, so lists are re-fetched: when the
+  // app comes back to the foreground (e.g. after tapping a Telegram alert),
+  // every 60 s while the home screen is open, and on the Refresh button.
+
+  const POLL_MS = 60000;
+  const MIN_GAP_MS = 15000;
+  let refreshing = false;
+
+  function onHome() { return !location.hash || location.hash === '#/' || location.hash === '#'; }
+  function userIsTyping() {
+    const active = document.activeElement;
+    if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
+    return Array.prototype.some.call(document.querySelectorAll('textarea'), function (t) { return t.value.trim(); });
+  }
+
+  async function refreshViews(manual) {
+    if (refreshing || !state.user) return;
+    if (!manual && state.refreshedAt && Date.now() - state.refreshedAt.getTime() < MIN_GAP_MS) return;
+    refreshing = true;
+    try {
+      const data = await Api.call('views');
+      state.views = data.views;
+      state.user.telegramLinked = data.telegramLinked;
+      state.refreshedAt = new Date();
+      if (onHome() && !document.querySelector('.overlay, .viewer')) renderHome(true);
+    } catch (err) {
+      if (manual) toast(err.message);
+    } finally {
+      refreshing = false;
+    }
+  }
+
+  function refreshCurrent() {
+    if (document.visibilityState !== 'visible') return;
+    if (onHome()) { refreshViews(false); return; }
+    const m = location.hash.match(/^#\/expense\/(.+)$/);
+    if (m && !userIsTyping() && !document.querySelector('.viewer')) renderExpense(decodeURIComponent(m[1]), { silent: true });
+  }
+
+  function startAutoRefresh() {
+    document.addEventListener('visibilitychange', refreshCurrent);
+    window.addEventListener('focus', refreshCurrent);
+    setInterval(function () { if (document.visibilityState === 'visible' && onHome()) refreshViews(false); }, POLL_MS);
+  }
+
   // -------------------------------------------------------------- bootstrap
 
   function renderSignIn(message) {
@@ -917,7 +978,12 @@
       state.ref = data.ref;
       state.limits = data.limits;
       state.views = data.views;
-      window.addEventListener('hashchange', route);
+      state.refreshedAt = new Date();
+      window.addEventListener('hashchange', function () {
+        route();
+        if (onHome()) refreshViews(false); // coming back to the list: pick up changes made elsewhere
+      });
+      startAutoRefresh();
       route();
     } catch (err) {
       renderFatal(err);

@@ -190,3 +190,7 @@ details.more-inline[open] > .input { margin-top: 6px; }
 .card.tg { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
 .tg-title { font-weight: 700; }
 .tg-footer { margin-top: 24px; }
+
+/* --- auto refresh --- */
+.refresh-line { margin: 0 0 12px; color: var(--muted); font-size: .85rem; text-align: right; }
+.refresh-line .link { padding: 4px; }
