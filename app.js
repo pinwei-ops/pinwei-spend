@@ -112,6 +112,8 @@
 
   const APPROVER_ROLES = ['OUTLET_MANAGER', 'OWNER', 'ADMIN'];
   const PAYER_ROLES = ['ACCOUNTANT', 'ADMIN'];
+  const ALL_VIEW_ROLES = ['OWNER', 'ADMIN'];
+  const allFilter = { outlet: '', status: 'OPEN', q: '' };
   let homeTab = null;
 
   /** Replaces or inserts an expense in a view list (keeps local state fresh without a reload). */
@@ -210,7 +212,8 @@
     const tabDefs = [];
     if (PAYER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'pay', label: 'To pay', count: state.views.to_pay.length });
     if (APPROVER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'approve', label: 'To approve', count: state.views.to_approve.length });
-    tabDefs.push({ key: 'mine', label: 'My expenses', count: byStatus(['NEEDS_INFO']).length });
+    tabDefs.push({ key: 'mine', label: tabDefs.length ? 'Mine' : 'My expenses', count: byStatus(['NEEDS_INFO']).length });
+    if (ALL_VIEW_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'all', label: 'All', count: 0 });
     if (!homeTab || !tabDefs.some(function (t) { return t.key === homeTab; })) {
       homeTab = (tabDefs.find(function (t) { return t.key !== 'mine' && t.count; }) || { key: 'mine' }).key;
     }
@@ -220,7 +223,9 @@
     })) : null;
 
     let body;
-    if (homeTab === 'approve') {
+    if (homeTab === 'all') {
+      body = allView();
+    } else if (homeTab === 'approve') {
       body = [section('Waiting for your decision', state.views.to_approve, { showEmpty: true, empty: 'Nothing waiting for you.', showSubmitter: true })];
     } else if (homeTab === 'pay') {
       const q = state.views.to_pay;
@@ -243,6 +248,58 @@
       h('button.link', { type: 'button', text: 'Refresh', onclick: function () { refreshViews(true); } }),
     ]);
     mount(page([tabs, refreshed].concat(body)), keepScroll);
+  }
+
+  /** Owner/admin timeline across every outlet (spec §8), loaded on first open. */
+  function allView() {
+    if (!state.views.all) {
+      Api.call('listExpenses', { view: 'all' }).then(function (res) {
+        state.views.all = res.expenses;
+        if (homeTab === 'all' && onHome()) renderHome(true);
+      }).catch(function (err) { toast(err.message); });
+      return [loading('Loading all expenses…')];
+    }
+    const OPEN = ['PENDING_APPROVAL', 'NEEDS_INFO', 'APPROVED', 'PARTIAL'];
+    const q = allFilter.q.trim().toLowerCase();
+    const rows = state.views.all.filter(function (e) {
+      if (allFilter.outlet && e.outlet_code !== allFilter.outlet) return false;
+      if (allFilter.status === 'OPEN' && OPEN.indexOf(e.status) === -1) return false;
+      if (allFilter.status && allFilter.status !== 'OPEN' && e.status !== allFilter.status) return false;
+      if (q && [e.expense_id, e.description, e.supplier_name, e.submitted_by_name, e.payee_name].join(' ').toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    });
+    const total = rows.reduce(function (sum, e) { return sum + (Number(e.amount_total) || 0); }, 0);
+
+    const outletSel = h('select.input', { onchange: function () { allFilter.outlet = outletSel.value; renderHome(true); } },
+      [h('option', { value: '', text: 'All outlets' })].concat(outletCodes().map(function (c) { return h('option', { value: c, text: c }); })));
+    outletSel.value = allFilter.outlet;
+    const statusSel = h('select.input', { onchange: function () { allFilter.status = statusSel.value; renderHome(true); } },
+      [h('option', { value: 'OPEN', text: 'Open (not paid yet)' }), h('option', { value: '', text: 'Every status' })]
+        .concat(state.ref.enums.filter(function (x) { return x.field === 'status'; }).map(function (x) { return h('option', { value: x.value, text: x.label }); })));
+    statusSel.value = allFilter.status;
+    const search = h('input.input', { type: 'search', placeholder: 'Search ID, supplier, person…', value: allFilter.q });
+    search.addEventListener('change', function () { allFilter.q = search.value; renderHome(true); });
+
+    // Timeline: grouped by submission day, newest first.
+    const groups = [];
+    rows.forEach(function (e) {
+      const day = fmtDate(e.created_at);
+      const last = groups[groups.length - 1];
+      if (last && last.day === day) last.items.push(e); else groups.push({ day: day, items: [e] });
+    });
+    return [
+      h('div.filters', {}, [h('div.grid2', {}, [outletSel, statusSel]), search]),
+      h('p.queue-total', { text: rows.length + ' expense' + (rows.length === 1 ? '' : 's') + ' · ' + fmtMoney(total) }),
+      rows.length ? null : h('p.empty', { text: 'Nothing matches.' }),
+    ].concat(groups.map(function (g) {
+      return h('section.section', {}, [h('h2.section-title', { text: g.day }), h('div.list', {}, g.items.map(function (e) { return expenseCard(e, true); }))]);
+    }));
+  }
+
+  function outletCodes() {
+    const seen = {};
+    (state.views.all || []).forEach(function (e) { seen[e.outlet_code] = true; });
+    return Object.keys(seen).sort();
   }
 
   // ----------------------------------------------------------- expense view
@@ -332,7 +389,9 @@
     mount(page([
       backLink(),
       attachmentView(e.attachment),
-      e.flags.length ? h('div.flags', {}, e.flags.map(function (f) { return h('div.flag', { text: '⚠ ' + f.message }); })) : null,
+      e.flags.length ? h('div.flags', {}, e.flags.map(function (f) {
+        return f.level === 'info' ? h('div.flag.info', { text: 'ℹ ' + f.message }) : h('div.flag', { text: '⚠ ' + f.message });
+      })) : null,
       h('div.card', {}, [
         h('div.item-top', {}, [h('span.amount.big', { text: fmtMoney(e.amount_total) }), statusChip(e.status)]),
         h('div.item-mid', { text: categoryLabel(e.expense_category) + ' · ' + label('request_type', e.request_type) }),
@@ -582,7 +641,7 @@
 
   // ------------------------------------------------------------------- form
 
-  const DRAFT_FIELDS = ['request_type', 'amount_total', 'expense_category', 'send_to', 'description', 'no_doc_reason',
+  const DRAFT_FIELDS = ['request_type', 'amount_total', 'expense_category', 'send_to', 'description', 'no_doc_reason', 'payee_type',
     'outlet_code', 'supplier_id', 'document_type', 'due_date', 'invoice_no', 'invoice_date', 'is_red_invoice',
     'amount_before_vat', 'vat_amount', 'payment_method', 'payee_name', 'payee_account', 'payee_bank'];
 
@@ -649,7 +708,7 @@
     }
 
     function segmented(name, options) {
-      const wrap = h('div.segmented', { role: 'radiogroup' });
+      const wrap = h('div.segmented', { role: 'radiogroup', style: 'grid-template-columns: repeat(' + options.length + ', 1fr)' });
       function paint() {
         wrap.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.value === values[name]); b.setAttribute('aria-checked', b.dataset.value === values[name]); });
       }
@@ -772,6 +831,42 @@
       : field('send_to', 'Send to', sendToList);
     if (!editing) refreshSendTo();
 
+    // --- who gets paid (supplier / someone else / me)
+    const payeeHint = h('p.hint');
+    const supplierField = field('supplier_id', 'Supplier', select('supplier_id', state.ref.suppliers, 'Not listed / none'));
+    const otherFields = h('div.payee-other', {}, [
+      field('payee_name', 'Their name', input('payee_name', { autocomplete: 'off' })),
+      field('payee_account', 'Their account number', input('payee_account', { inputmode: 'numeric', autocomplete: 'off' })),
+      field('payee_bank', 'Their bank', input('payee_bank', { autocomplete: 'off' })),
+    ]);
+    function paintPayee() {
+      const t = values.payee_type;
+      supplierField.querySelector('.label').textContent = t === 'SUPPLIER' ? 'Supplier' : 'Bought from (optional)';
+      supplierField.hidden = !t;
+      otherFields.hidden = t !== 'OTHER';
+      payeeHint.textContent = t === 'SUBMITTER'
+        ? 'The accountant pays you back. Ask the admin to put your bank account in the system once.'
+        : t === 'OTHER'
+          ? 'e.g. a delivery driver. Money to someone other than the supplier always needs an approver.'
+          : t === 'SUPPLIER' ? 'Paid to the supplier\u2019s registered bank account.' : '';
+      // V7: a third-party payee can never go straight to the accountant.
+      if (t === 'OTHER' && !editing && values.send_to === 'ACCOUNTANT') {
+        const opts = state.ref.sendTo[values.outlet_code] || [];
+        const approver = opts.find(function (o) { return o.kind !== 'ACCOUNTANT'; });
+        if (approver) { values.send_to = approver.value; saveDraft(values); refreshSendTo(); }
+      }
+    }
+    const payeeField = field('payee_type', 'Who gets paid?', h('div', {}, [
+      segmented('payee_type', [
+        { value: 'SUPPLIER', label: 'Supplier', onpick: paintPayee },
+        { value: 'OTHER', label: 'Someone else', onpick: paintPayee },
+        { value: 'SUBMITTER', label: 'Me (I paid)', onpick: paintPayee },
+      ]),
+      payeeHint,
+    ]));
+    const payeeBlock = h('div.payee-block', {}, [payeeField, supplierField, otherFields]);
+    paintPayee();
+
     // --- description
     const desc = h('textarea.input', { rows: 2, placeholder: 'What was bought, and for what?', oninput: function () { set('description', desc.value); } });
     desc.value = values.description || '';
@@ -789,7 +884,6 @@
     const more = h('details.more', { open: DRAFT_FIELDS.slice(6).some(function (f) { return f !== 'payment_method' && f !== 'outlet_code' && values[f]; }) }, [
       h('summary', { text: 'More details (optional)' }),
       outletField,
-      field('supplier_id', 'Supplier', select('supplier_id', state.ref.suppliers, 'Not listed / none')),
       field('document_type', 'Document type', select('document_type', state.ref.documentTypes, 'Choose…')),
       field('due_date', 'Pay by (due date)', input('due_date', { type: 'date' })),
       field('invoice_no', 'Invoice number', input('invoice_no', { autocomplete: 'off' })),
@@ -800,10 +894,6 @@
         field('vat_amount', 'VAT', moneyInput('vat_amount')),
       ]),
       field('payment_method', 'Payment method', select('payment_method', state.ref.enums.filter(function (e) { return e.field === 'payment_method'; }))),
-      h('p.hint', { text: 'Fill the payee only if the money goes to someone other than the supplier (e.g. a delivery driver). This always needs an approver.' }),
-      field('payee_name', 'Payee name', input('payee_name', { autocomplete: 'off' })),
-      field('payee_account', 'Payee account number', input('payee_account', { inputmode: 'numeric', autocomplete: 'off' })),
-      field('payee_bank', 'Payee bank', input('payee_bank', { autocomplete: 'off' })),
     ]);
 
     // --- warnings panel + submit
@@ -865,7 +955,7 @@
       h('a.back', { href: editing ? '#/expense/' + encodeURIComponent(existing.expense_id) : '#/', text: '← Cancel' }),
       h('h1.title', { text: editing ? 'Edit and resubmit ' + existing.expense_id : 'New expense' }),
       editing && existing.info_request ? h('div.item-note', { text: 'Requested: ' + existing.info_request }) : null,
-      typeField, fileField, noDocField, amountField, catField, sendField, descField, more,
+      typeField, fileField, noDocField, amountField, catField, payeeBlock, sendField, descField, more,
       formErrors, warnBox,
       h('div.sticky-submit', {}, [submitBtn]),
     ]);
@@ -895,7 +985,9 @@
     refreshing = true;
     try {
       const data = await Api.call('views');
+      const hadAll = Boolean(state.views.all);
       state.views = data.views;
+      if (hadAll) state.views.all = (await Api.call('listExpenses', { view: 'all' })).expenses;
       state.user.telegramLinked = data.telegramLinked;
       state.refreshedAt = new Date();
       if (onHome() && !document.querySelector('.overlay, .viewer')) renderHome(true);

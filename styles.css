@@ -194,3 +194,13 @@ details.more-inline[open] > .input { margin-top: 6px; }
 /* --- auto refresh --- */
 .refresh-line { margin: 0 0 12px; color: var(--muted); font-size: .85rem; text-align: right; }
 .refresh-line .link { padding: 4px; }
+
+/* --- who gets paid --- */
+.payee-block { display: flex; flex-direction: column; gap: 12px; }
+.payee-other { display: flex; flex-direction: column; gap: 12px; padding: 12px; border: 1px dashed var(--line); border-radius: var(--radius); }
+.segmented button { padding: 0 6px; }
+.flag.info { background: var(--info-bg); color: var(--info); }
+
+/* --- all expenses --- */
+.filters { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.tab { font-size: .92rem; padding: 0 4px; }
