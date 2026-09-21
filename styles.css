@@ -185,3 +185,8 @@ details.more[open] > .field, details.more[open] > .grid2, details.more[open] > .
 .proof-thumb { display: block; width: 96px; height: 96px; margin-top: 10px; object-fit: cover; border-radius: 8px; cursor: zoom-in; }
 details.more-inline > summary { min-height: 40px; display: flex; align-items: center; color: var(--muted); cursor: pointer; }
 details.more-inline[open] > .input { margin-top: 6px; }
+
+/* --- step 7: Telegram linking --- */
+.card.tg { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
+.tg-title { font-weight: 700; }
+.tg-footer { margin-top: 24px; }

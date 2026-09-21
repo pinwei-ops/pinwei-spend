@@ -142,6 +142,59 @@
     return h('section.section', {}, [head, list]);
   }
 
+  /** Card that walks the user through linking Telegram (no webhook: they tap Start, then "Done"). */
+  function telegramCard() {
+    const card = h('div.card.tg');
+    function showIntro() {
+      card.textContent = '';
+      card.appendChild(h('div.tg-title', { text: 'Get alerts on Telegram' }));
+      card.appendChild(h('p.hint', { text: 'Know right away when something needs you. Without it, alerts go to your email.' }));
+      card.appendChild(h('button.btn', { type: 'button', text: 'Connect Telegram', onclick: start }));
+    }
+    async function start(ev) {
+      ev.target.disabled = true;
+      ev.target.textContent = 'Preparing…';
+      try {
+        const res = await Api.call('telegramLinkStart');
+        card.textContent = '';
+        card.appendChild(h('div.tg-title', { text: 'Two taps' }));
+        card.appendChild(h('p.hint', { text: '1. Open the bot and tap Start.  2. Come back here and tap Done.' }));
+        card.appendChild(h('a.btn.btn-primary', { href: res.url, target: '_blank', rel: 'noopener', text: '1 · Open Telegram' }));
+        const err = h('p.error', { hidden: true });
+        const done = h('button.btn', { type: 'button', text: '2 · Done, I tapped Start', onclick: async function () {
+          done.disabled = true;
+          err.hidden = true;
+          try {
+            await Api.call('telegramLinkFinish');
+            state.user.telegramLinked = true;
+            toast('Telegram connected', 'ok');
+            renderHome();
+          } catch (ex) {
+            err.textContent = ex.message;
+            err.hidden = false;
+            done.disabled = false;
+          }
+        } });
+        card.appendChild(done);
+        card.appendChild(err);
+      } catch (ex) {
+        toast(ex.message);
+        showIntro();
+      }
+    }
+    showIntro();
+    return card;
+  }
+
+  function telegramFooter() {
+    return h('p.hint.center-text.tg-footer', {}, [
+      'Telegram alerts: on · ',
+      h('button.link', { type: 'button', text: 'Disconnect', onclick: async function () {
+        try { await Api.call('telegramUnlink'); state.user.telegramLinked = false; renderHome(); } catch (ex) { toast(ex.message); }
+      } }),
+    ]);
+  }
+
   function renderHome() {
     const role = state.user.role;
     const mine = state.views.mine;
@@ -178,6 +231,7 @@
         section('Done', byStatus(['PAID', 'CLOSED', 'REJECTED', 'CANCELLED']), { collapsed: true }),
       ];
     }
+    body.push(state.user.telegramLinked ? telegramFooter() : telegramCard());
     mount(page([tabs].concat(body)));
   }
 
