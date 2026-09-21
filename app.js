@@ -95,7 +95,7 @@
 
   function header() {
     return h('header.topbar', {}, [
-      h('a.brand', { href: '#/', text: 'Pin Wei Spend' }),
+      h('a.brand', { href: '#/' }, [h('img.brand-logo', { src: 'logo-96.png', alt: '' }), h('span', { text: 'Pin Wei Spend' })]),
       h('div.who', {}, [
         h('span.who-name', { text: state.user.name }),
         h('span.who-role', { text: label('role', state.user.role) }),
@@ -214,6 +214,10 @@
     if (APPROVER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'approve', label: 'To approve', count: state.views.to_approve.length + (state.views.to_check || []).length });
     tabDefs.push({ key: 'mine', label: tabDefs.length ? 'Mine' : 'My expenses', count: byStatus(['NEEDS_INFO']).length });
     if (ALL_VIEW_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'all', label: 'All', count: 0 });
+    if (tabDefs.length >= 4) {                      // phone width: keep tab labels on one line
+      const short = { pay: 'Pay', approve: 'Approve' };
+      tabDefs.forEach(function (t) { if (short[t.key]) t.label = short[t.key]; });
+    }
     if (!homeTab || !tabDefs.some(function (t) { return t.key === homeTab; })) {
       homeTab = (tabDefs.find(function (t) { return t.key !== 'mine' && t.count; }) || { key: 'mine' }).key;
     }
@@ -1177,6 +1181,7 @@
   function renderSignIn(message) {
     const slot = h('div.signin-slot');
     mount(h('div.page', {}, [h('main.content.center', {}, [
+      h('img.signin-logo', { src: 'logo-192.png', alt: 'Pin Wei' }),
       h('h1.title', { text: 'Pin Wei Spend' }),
       h('p.sub', { text: message || 'Sign in with your Google account to submit and track expenses.' }),
       slot,
