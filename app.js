@@ -670,11 +670,18 @@
     btn.disabled = true;
     try {
       const res = await Api.call('exportToPay');
-      const cell = function (v) { const t = String(v === null || v === undefined ? '' : v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+      const cell = function (v) {
+        let t = String(v === null || v === undefined ? '' : v);
+        if (typeof v !== 'number' && /^[=+\-@\t\r]/.test(t)) t = "'" + t;   // stop Excel from running it as a formula
+        return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+      };
       // Account numbers as ="..." so Excel keeps leading zeros.
       const accIdx = res.columns.indexOf('account');
       const lines = [res.columns.join(',')].concat(res.rows.map(function (r) {
-        return r.map(function (v, i) { return i === accIdx && v ? '="' + v + '"' : cell(v); }).join(',');
+        return r.map(function (v, i) {
+          const acc = i === accIdx ? String(v || '').replace(/[^0-9A-Za-z-]/g, '') : '';
+          return i === accIdx && acc ? '="' + acc + '"' : cell(v);
+        }).join(',');
       }));
       const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
       const a = h('a', { href: URL.createObjectURL(blob), download: 'pinwei-to-pay-' + todayVN() + '.csv' });
