@@ -78,10 +78,6 @@
     return h('span.chip.st-' + status, { text: label('status', status) });
   }
 
-  const CATEGORY_ICON = {
-    FOOD: '🥬', SUPPLIES: '🧴', RENT: '🏠', UTILITIES: '💡', MAINTENANCE: '🔧',
-    MARKETING: '📣', GIFTS: '🎁', STAFF: '👥', EQUIPMENT: '🖥️', OTHER: '📦',
-  };
   const OPEN_STATUSES = ['PENDING_APPROVAL', 'NEEDS_INFO', 'APPROVED', 'PARTIAL'];
   function isOverdue(e) {
     if (!e.due_date || OPEN_STATUSES.indexOf(e.status) === -1) return false;
@@ -119,8 +115,7 @@
         h('span.who-name', { text: state.user.name }),
         h('span.who-role', { text: label('role', state.user.role) }),
       ]),
-      h('button.icon-btn', { type: 'button', title: 'Light / dark', 'aria-label': 'Switch light or dark theme',
-        text: currentTheme() === 'dark' ? '☀' : '☾', onclick: toggleTheme }),
+      h('button.link', { type: 'button', title: 'Switch light or dark theme', text: currentTheme() === 'dark' ? 'Light' : 'Dark', onclick: toggleTheme }),
       h('button.link', { type: 'button', text: 'Sign out', onclick: function () { Api.signOut(); location.reload(); } }),
     ])]);
   }
@@ -150,14 +145,13 @@
   function expenseCard(e, showSubmitter) {
     const overdue = isOverdue(e);
     return h('a.item', { href: '#/expense/' + encodeURIComponent(e.expense_id), 'data-status': e.status }, [
-      h('div.item-icon', { 'aria-hidden': 'true', text: CATEGORY_ICON[e.expense_category] || '📦' }),
       h('div.item-body', {}, [
         h('div.item-top', {}, [h('span.amount', { text: fmtMoney(e.status === 'PARTIAL' ? e.balance_due : e.amount_total) + (e.status === 'PARTIAL' ? ' left' : '') }), statusChip(e.status)]),
         h('div.item-mid', { text: categoryLabel(e.expense_category) + (e.supplier_name ? ' · ' + e.supplier_name : e.description ? ' · ' + e.description : '') }),
         h('div.item-meta', {}, [
           h('span', { text: e.expense_id }),
           h('span', { text: fmtDate(e.created_at) }),
-          showSubmitter ? h('span', { text: e.submitted_by_name + ' · ' + e.outlet_code }) : h('span', { text: '→ ' + e.send_to_name }),
+          showSubmitter ? h('span', { text: e.submitted_by_name + ' · ' + e.outlet_code }) : h('span', { text: 'To ' + e.send_to_name }),
           e.due_date && OPEN_STATUSES.indexOf(e.status) !== -1 ? h('span.due' + (overdue ? '.overdue' : ''), { text: (overdue ? 'Overdue · ' : 'Due ') + fmtDate(e.due_date) }) : null,
         ]),
         e.status === 'NEEDS_INFO' && e.info_request ? h('div.item-note', { text: 'Requested: ' + e.info_request }) : null,
@@ -177,7 +171,7 @@
     }));
   }
   function sum(list, field) { return list.reduce(function (a, e) { return a + (Number(e[field]) || 0); }, 0); }
-  /** Short money for summary tiles: 7,586,000 → "7.59M ₫". */
+  /** Short money for summary tiles: 7,586,000 becomes "7.59M ₫". */
   function fmtShort(n) {
     n = Number(n) || 0;
     if (n >= 1e9) return (n / 1e9).toFixed(2).replace(/\.?0+$/, '') + 'B ₫';
@@ -297,7 +291,7 @@
           { value: q.filter(function (e) { return e.status === 'PARTIAL'; }).length, label: 'Partially paid' },
         ]),
         section('Approved, waiting for payment', q, { showEmpty: true, empty: 'Nothing to pay.', showSubmitter: true }),
-        q.length ? h('button.btn', { type: 'button', text: '⬇  Export list for bank transfers (CSV)', onclick: exportToPay }) : null,
+        q.length ? h('button.btn', { type: 'button', text: 'Export list for bank transfers (CSV)', onclick: exportToPay }) : null,
       ];
     } else {
       body = [
@@ -394,7 +388,7 @@
     if (att.error) return h('div.doc-missing', { text: att.error });
     const url = URL.createObjectURL(base64ToBlob(att.base64, att.mime));
     if (att.mime === 'application/pdf') {
-      return h('a.btn.btn-doc', { href: url, target: '_blank', rel: 'noopener' }, ['📄  Open PDF document']);
+      return h('a.btn.btn-doc', { href: url, target: '_blank', rel: 'noopener' }, ['Open PDF document']);
     }
     const img = h('img.doc-img', { src: url, alt: 'Invoice', onclick: function () { openViewer(url); } });
     return h('div.doc', {}, [img, h('p.hint.center-text', { text: 'Tap the photo to zoom' })]);
@@ -405,7 +399,7 @@
     const close = function () { viewer.remove(); };
     viewer.addEventListener('click', function (ev) { if (ev.target === viewer) close(); });
     viewer.appendChild(h('img', { src: url, alt: 'Invoice, full size' }));
-    viewer.appendChild(h('button.viewer-close', { type: 'button', text: '✕ Close', onclick: close }));
+    viewer.appendChild(h('button.viewer-close', { type: 'button', text: 'Close', onclick: close }));
     document.body.appendChild(viewer);
   }
 
@@ -444,7 +438,7 @@
   /** opts.silent: background refresh — no spinner, keep scroll, re-render only if something changed. */
   async function renderExpense(id, opts) {
     const silent = Boolean(opts && opts.silent);
-    const backLink = function () { return h('a.back', { href: '#/', text: '← Back' }); };
+    const backLink = function () { return h('a.back', { href: '#/', text: 'Back' }); };
     if (!silent) mount(page([backLink(), loading()]));
     let e;
     try {
@@ -469,7 +463,7 @@
       ]),
       h('div.detail-side', {}, [
       e.flags.length ? h('div.flags', {}, e.flags.map(function (f) {
-        return f.level === 'info' ? h('div.flag.info', { text: 'ℹ ' + f.message }) : h('div.flag', { text: '⚠ ' + f.message });
+        return f.level === 'info' ? h('div.flag.info', { text: f.message }) : h('div.flag', { text: f.message });
       })) : null,
       h('div.card', { 'data-status': e.status }, [
         h('div.item-top', {}, [h('span.amount.big', { text: fmtMoney(e.amount_total) }), statusChip(e.status)]),
@@ -496,7 +490,7 @@
       ]),
       e.can.decide ? decisionPanel(e) : null,
       e.can.approveSupplier ? supplierApprovalCard(e) : null,
-      e.pay_blocked ? h('div.flag', { text: '⛔ ' + e.pay_blocked }) : null,
+      e.pay_blocked ? h('div.flag', { text: e.pay_blocked }) : null,
       e.pay_to && e.can.pay ? payToCard(e.pay_to) : null,
       e.can.pay ? paymentPanel(e) : null,
       e.can.postCheck ? postCheckPanel(e) : null,
@@ -825,7 +819,7 @@
       h('p.hint', { text: 'Transfer the money in your bank app first, then record it here.' }),
       fileInput,
       proofBox,
-      h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['📷  Attach transfer confirmation']),
+      h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['Attach transfer confirmation']),
       h('div.field', {}, [h('label.label', { text: 'Amount paid' }), h('div.money-wrap', {}, [amountInput, h('span.suffix', { text: '₫' })]), hint]),
       h('div.grid2', {}, [
         h('div.field', {}, [h('label.label', { text: 'Paid on' }), dateInput]),
@@ -855,7 +849,7 @@
     if (!e) {
       mount(page([loading()]));
       try { e = await Api.call('getExpense', { id: id }); } catch (err) {
-        mount(page([h('a.back', { href: '#/', text: '← Back' }), h('p.empty', { text: err.message })]));
+        mount(page([h('a.back', { href: '#/', text: 'Back' }), h('p.empty', { text: err.message })]));
         return;
       }
     }
@@ -955,7 +949,7 @@
     const fileField = field('file', 'Invoice photo', h('div', {}, [
       fileInput,
       preview,
-      h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['📷  Take or choose photo']),
+      h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['Take or choose photo']),
     ]), 'A clear photo of the invoice, delivery note or quote. PDF works too.');
 
     function paintAttachment(status) {
@@ -1187,7 +1181,7 @@
     }
 
     const form = h('form.form', { novalidate: true, onsubmit: function (ev) { ev.preventDefault(); submit(false); } }, [
-      h('a.back', { href: editing ? '#/expense/' + encodeURIComponent(existing.expense_id) : '#/', text: '← Cancel' }),
+      h('a.back', { href: editing ? '#/expense/' + encodeURIComponent(existing.expense_id) : '#/', text: 'Cancel' }),
       h('h1.title', { text: editing ? (existing.status === 'NEEDS_INFO' ? 'Edit and resubmit ' : 'Edit ') + existing.expense_id : 'New expense' }),
       editing && existing.status === 'APPROVED' && existing.send_to !== 'ACCOUNTANT'
         ? h('div.item-note', { text: 'Already approved. Changing the amount, the supplier or who gets paid sends it back for approval.' }) : null,
