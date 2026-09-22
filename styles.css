@@ -4,7 +4,7 @@
 :root {
   --font: "Be Vietnam Pro", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --bg: #f3f4f8; --bg-accent: #e9ebf5;
-  --fg: #171a2c; --muted: #5f6478; --faint: #8a8fa3;
+  --fg: #171a2c; --muted: #555a6e; --faint: #6b7085;
   --card: #ffffff; --line: #e2e4ee; --input: #ffffff; --hover: #f7f8fc;
   --brand: #e21e36; --brand-strong: #c3142a; --brand-fg: #ffffff; --brand-soft: #fde8eb;
   --navy: #28318a; --navy-strong: #1e2570; --navy-fg: #ffffff; --navy-soft: #e8eaf8; --accent: #28318a;
@@ -26,7 +26,7 @@
 }
 :root[data-theme="dark"] {
   --bg: #0e1120; --bg-accent: #151a33;
-  --fg: #eef0fa; --muted: #a3a8c0; --faint: #7c82a0;
+  --fg: #eef0fa; --muted: #b0b5cc; --faint: #9197b3;
   --card: #171b2f; --line: #272c46; --input: #1d2239; --hover: #1d2239;
   --brand: #ff4d63; --brand-strong: #ff6b7e; --brand-fg: #ffffff; --brand-soft: #3a1720;
   --navy: #1b2159; --navy-strong: #141943; --navy-fg: #ffffff; --navy-soft: #232a5c; --accent: #9aa3ff;
@@ -47,7 +47,7 @@
 }
 
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 88px; scroll-padding-bottom: 96px; }
 body {
   margin: 0; color: var(--fg); font: 15px/1.5 var(--font);
   background: var(--bg);
@@ -311,4 +311,20 @@ details.more-inline[open] > .input { margin-top: 6px; }
 @media (max-width: 480px) {
   .brand span { display: none; }
   .topbar-inner { gap: 10px; }
+}
+
+/* --- UX pass (ui-ux-pro-max guidelines) --- */
+.error-summary { padding: 14px 16px; border: 2px solid var(--bad); border-radius: var(--radius); background: var(--bad-bg); color: var(--bad); }
+.error-summary:focus { outline: 3px solid var(--focus); outline-offset: 2px; }
+.error-summary-title { margin: 0 0 6px; font-weight: 700; }
+.error-summary ul { margin: 0; padding-left: 20px; }
+.error-summary a { color: var(--bad); font-weight: 500; text-underline-offset: 3px; }
+/* 7. comfortable targets for small text actions */
+.link { display: inline-flex; align-items: center; min-height: 36px; }
+.preview-row .link, .payto-acc .link { min-height: 44px; padding: 8px 10px; }
+.topbar .link { min-height: 40px; }
+/* 6. respect reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: 1.2s !important; scroll-behavior: auto !important; }
+  .toast { transition: none; }
 }

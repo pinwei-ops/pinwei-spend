@@ -74,8 +74,14 @@
     NEEDS_INFO: 'warn', PENDING_APPROVAL: 'info', APPROVED: 'info', PARTIAL: 'info',
     PAID: 'ok', CLOSED: 'ok', REJECTED: 'bad', CANCELLED: 'muted', DRAFT: 'muted',
   };
+  // Short badge text so a status never wraps; the full wording stays available to screen readers.
+  const STATUS_SHORT = {
+    PENDING_APPROVAL: 'Pending approval', NEEDS_INFO: 'Needs info', APPROVED: 'Approved',
+    PARTIAL: 'Partially paid', PAID: 'Paid', CLOSED: 'Closed', REJECTED: 'Rejected', CANCELLED: 'Cancelled', DRAFT: 'Draft',
+  };
   function statusChip(status) {
-    return h('span.chip.st-' + status, { text: label('status', status) });
+    const full = label('status', status);
+    return h('span.chip.st-' + status, { text: STATUS_SHORT[status] || full, title: full, 'aria-label': 'Status: ' + full });
   }
 
   const OPEN_STATUSES = ['PENDING_APPROVAL', 'NEEDS_INFO', 'APPROVED', 'PARTIAL'];
@@ -373,7 +379,7 @@
   // ----------------------------------------------------------- expense view
 
   function loading(text) {
-    return h('div.center-block', {}, [h('div.spinner'), h('p.sub', { text: text || 'Loading…' })]);
+    return h('div.center-block', { role: 'status', 'aria-live': 'polite' }, [h('div.spinner', { 'aria-hidden': 'true' }), h('p.sub', { text: text || 'Loading…' })]);
   }
 
   function base64ToBlob(b64, mime) {
@@ -879,18 +885,31 @@
     function set(field, value) { values[field] = value; if (!editing) saveDraft(values); clearError(field); }
 
     function field(name, labelText, control, hint) {
+      const id = 'f_' + name;
+      // Bind the label to the first real control inside (input/select/textarea), or name the group.
+      const target = control.matches && control.matches('input,select,textarea') ? control : control.querySelector && control.querySelector('input:not([type=file]):not([type=radio]),select,textarea');
+      const isGroup = !target;
+      if (target) target.id = id;
+      if (isGroup && labelText) { control.setAttribute('role', control.getAttribute('role') || 'group'); control.setAttribute('aria-labelledby', id + '_label'); }
+      const err = h('p.error', { hidden: true, id: id + '_error' });
+      if (target) target.setAttribute('aria-describedby', id + '_error');
       const wrap = h('div.field', { 'data-field': name }, [
-        labelText ? h('label.label', { text: labelText }) : null,
+        labelText ? h(isGroup ? 'span.label' : 'label.label', isGroup ? { id: id + '_label', text: labelText } : { for: id, text: labelText }) : null,
         control,
         hint ? h('p.hint', { text: hint }) : null,
-        h('p.error', { hidden: true }),
+        err,
       ]);
       fieldEls[name] = wrap;
       return wrap;
     }
     function clearError(name) {
       const w = fieldEls[name];
-      if (w) { w.classList.remove('has-error'); w.querySelector('.error').hidden = true; }
+      if (w) {
+        w.classList.remove('has-error');
+        w.querySelector('.error').hidden = true;
+        const c = w.querySelector('#f_' + name);
+        if (c) c.removeAttribute('aria-invalid');
+      }
     }
     function showError(name, message) {
       const w = fieldEls[name] || fieldEls._form;
@@ -898,6 +917,28 @@
       const p = w.querySelector('.error');
       p.textContent = message;
       p.hidden = false;
+      const c = w.querySelector('#f_' + name);
+      if (c) c.setAttribute('aria-invalid', 'true');
+    }
+
+    // 1. Focusable error summary at the top of the form, each item linking to its field.
+    const errorSummary = h('div.error-summary', { role: 'alert', tabindex: '-1', hidden: true });
+    function showErrorSummary(details) {
+      errorSummary.textContent = '';
+      errorSummary.appendChild(h('p.error-summary-title', { text: details.length === 1 ? 'Please fix 1 problem' : 'Please fix ' + details.length + ' problems' }));
+      errorSummary.appendChild(h('ul', {}, details.map(function (d) {
+        const targetField = fieldEls[d.field] ? d.field : '_form';
+        return h('li', {}, [h('a', { href: '#', text: d.message, onclick: function (ev) {
+          ev.preventDefault();
+          const w = fieldEls[targetField];
+          const c = w && (w.querySelector('#f_' + targetField) || w.querySelector('button, input, select, textarea'));
+          if (w) w.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          if (c) c.focus({ preventScroll: true });
+        } })]);
+      })));
+      errorSummary.hidden = false;
+      errorSummary.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      errorSummary.focus({ preventScroll: true });
     }
 
     function segmented(name, options) {
@@ -1126,6 +1167,7 @@
       if (submitting) return;
       submitting = true;
       warnBox.hidden = true;
+      errorSummary.hidden = true;
       Object.keys(fieldEls).forEach(clearError);
       submitBtn.disabled = true;
       try {
@@ -1156,11 +1198,11 @@
         if (err.code === 'VALIDATION' && err.details.length) {
           err.details.forEach(function (d) { showError(d.field in fieldEls ? d.field : '_form', d.message); });
           if (err.details.some(function (d) { return more.contains(fieldEls[d.field] || null); })) more.open = true;
+          showErrorSummary(err.details);
         } else {
           showError('_form', err.message || 'Something went wrong. Please try again.');
+          showErrorSummary([{ field: '_form', message: err.message || 'Something went wrong. Please try again.' }]);
         }
-        const first = form.querySelector('.has-error');
-        if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
       } finally {
         submitting = false;
         submitBtn.disabled = false;
@@ -1183,6 +1225,7 @@
     const form = h('form.form', { novalidate: true, onsubmit: function (ev) { ev.preventDefault(); submit(false); } }, [
       h('a.back', { href: editing ? '#/expense/' + encodeURIComponent(existing.expense_id) : '#/', text: 'Cancel' }),
       h('h1.title', { text: editing ? (existing.status === 'NEEDS_INFO' ? 'Edit and resubmit ' : 'Edit ') + existing.expense_id : 'New expense' }),
+      errorSummary,
       editing && existing.status === 'APPROVED' && existing.send_to !== 'ACCOUNTANT'
         ? h('div.item-note', { text: 'Already approved. Changing the amount, the supplier or who gets paid sends it back for approval.' }) : null,
       editing && existing.info_request ? h('div.item-note', { text: 'Requested: ' + existing.info_request }) : null,
