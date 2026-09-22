@@ -75,7 +75,26 @@
     PAID: 'ok', CLOSED: 'ok', REJECTED: 'bad', CANCELLED: 'muted', DRAFT: 'muted',
   };
   function statusChip(status) {
-    return h('span.chip.' + (STATUS_TONE[status] || 'muted'), { text: label('status', status) });
+    return h('span.chip.st-' + status, { text: label('status', status) });
+  }
+
+  const CATEGORY_ICON = {
+    FOOD: '🥬', SUPPLIES: '🧴', RENT: '🏠', UTILITIES: '💡', MAINTENANCE: '🔧',
+    MARKETING: '📣', GIFTS: '🎁', STAFF: '👥', EQUIPMENT: '🖥️', OTHER: '📦',
+  };
+  const OPEN_STATUSES = ['PENDING_APPROVAL', 'NEEDS_INFO', 'APPROVED', 'PARTIAL'];
+  function isOverdue(e) {
+    if (!e.due_date || OPEN_STATUSES.indexOf(e.status) === -1) return false;
+    return new Date(e.due_date).getTime() < new Date(new Date().toDateString()).getTime();
+  }
+
+  // Theme: light by default (brand look); dark is opt-in and remembered.
+  function currentTheme() { return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'; }
+  function toggleTheme() {
+    const next = currentTheme() === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('pw_theme', next); } catch (err) { /* private mode */ }
+    route();
   }
 
   // ----------------------------------------------------------------- router
@@ -94,14 +113,16 @@
   // ------------------------------------------------------------------ shell
 
   function header() {
-    return h('header.topbar', {}, [
+    return h('header.topbar', {}, [h('div.topbar-inner', {}, [
       h('a.brand', { href: '#/' }, [h('img.brand-logo', { src: 'logo-96.png', alt: '' }), h('span', { text: 'Pin Wei Spend' })]),
       h('div.who', {}, [
         h('span.who-name', { text: state.user.name }),
         h('span.who-role', { text: label('role', state.user.role) }),
       ]),
+      h('button.icon-btn', { type: 'button', title: 'Light / dark', 'aria-label': 'Switch light or dark theme',
+        text: currentTheme() === 'dark' ? '☀' : '☾', onclick: toggleTheme }),
       h('button.link', { type: 'button', text: 'Sign out', onclick: function () { Api.signOut(); location.reload(); } }),
-    ]);
+    ])]);
   }
 
   function page(children) {
@@ -127,18 +148,42 @@
   }
 
   function expenseCard(e, showSubmitter) {
-    return h('a.item', { href: '#/expense/' + encodeURIComponent(e.expense_id) }, [
-      h('div.item-top', {}, [h('span.amount', { text: fmtMoney(e.status === 'PARTIAL' ? e.balance_due : e.amount_total) + (e.status === 'PARTIAL' ? ' left' : '') }), statusChip(e.status)]),
-      h('div.item-mid', { text: categoryLabel(e.expense_category) + (e.supplier_name ? ' · ' + e.supplier_name : e.description ? ' · ' + e.description : '') }),
-      h('div.item-meta', {}, [
-        h('span', { text: e.expense_id }),
-        h('span', { text: fmtDate(e.created_at) }),
-        showSubmitter ? h('span', { text: e.submitted_by_name + ' · ' + e.outlet_code }) : h('span', { text: '→ ' + e.send_to_name }),
-        e.due_date ? h('span.due', { text: 'Due ' + fmtDate(e.due_date) }) : null,
+    const overdue = isOverdue(e);
+    return h('a.item', { href: '#/expense/' + encodeURIComponent(e.expense_id), 'data-status': e.status }, [
+      h('div.item-icon', { 'aria-hidden': 'true', text: CATEGORY_ICON[e.expense_category] || '📦' }),
+      h('div.item-body', {}, [
+        h('div.item-top', {}, [h('span.amount', { text: fmtMoney(e.status === 'PARTIAL' ? e.balance_due : e.amount_total) + (e.status === 'PARTIAL' ? ' left' : '') }), statusChip(e.status)]),
+        h('div.item-mid', { text: categoryLabel(e.expense_category) + (e.supplier_name ? ' · ' + e.supplier_name : e.description ? ' · ' + e.description : '') }),
+        h('div.item-meta', {}, [
+          h('span', { text: e.expense_id }),
+          h('span', { text: fmtDate(e.created_at) }),
+          showSubmitter ? h('span', { text: e.submitted_by_name + ' · ' + e.outlet_code }) : h('span', { text: '→ ' + e.send_to_name }),
+          e.due_date && OPEN_STATUSES.indexOf(e.status) !== -1 ? h('span.due' + (overdue ? '.overdue' : ''), { text: (overdue ? 'Overdue · ' : 'Due ') + fmtDate(e.due_date) }) : null,
+        ]),
+        e.status === 'NEEDS_INFO' && e.info_request ? h('div.item-note', { text: 'Requested: ' + e.info_request }) : null,
+        e.status === 'REJECTED' && e.rejection_reason ? h('div.item-note.bad', { text: 'Rejected: ' + e.rejection_reason }) : null,
       ]),
-      e.status === 'NEEDS_INFO' && e.info_request ? h('div.item-note', { text: 'Requested: ' + e.info_request }) : null,
-      e.status === 'REJECTED' && e.rejection_reason ? h('div.item-note.bad', { text: 'Rejected: ' + e.rejection_reason }) : null,
     ]);
+  }
+
+  /** Summary tiles at the top of a tab. tiles: [{value, label, brand?, alert?}] */
+  function stats(tiles) {
+    tiles = tiles.filter(Boolean);
+    return h('div.stats.stats-' + tiles.length, {}, tiles.map(function (t) {
+      return h('div.stat' + (t.brand ? '.stat-hero' : '') + (t.alert ? '.alert' : ''), {}, [
+        h('div.stat-value', { text: String(t.value) }),
+        h('div.stat-label', { text: t.label }),
+      ]);
+    }));
+  }
+  function sum(list, field) { return list.reduce(function (a, e) { return a + (Number(e[field]) || 0); }, 0); }
+  /** Short money for summary tiles: 7,586,000 → "7.59M ₫". */
+  function fmtShort(n) {
+    n = Number(n) || 0;
+    if (n >= 1e9) return (n / 1e9).toFixed(2).replace(/\.?0+$/, '') + 'B ₫';
+    if (n >= 1e6) return (n / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M ₫';
+    if (n >= 1e3) return Math.round(n / 1e3) + 'K ₫';
+    return n + ' ₫';
   }
 
   function section(title, items, opts) {
@@ -230,20 +275,37 @@
     if (homeTab === 'all') {
       body = allView();
     } else if (homeTab === 'approve') {
+      const qa = state.views.to_approve;
       body = [
+        stats([
+          { value: qa.length, label: 'Waiting', brand: true },
+          { value: fmtShort(sum(qa, 'amount_total')), label: 'Total' },
+          { value: (state.views.to_check || []).length, label: 'Cash checks' },
+        ]),
         section('Waiting for your decision', state.views.to_approve, { showEmpty: true, empty: 'Nothing waiting for you.', showSubmitter: true }),
         section('Cash payments to post-check', state.views.to_check || [], { showSubmitter: true }),
       ];
     } else if (homeTab === 'pay') {
       const q = state.views.to_pay;
       const total = q.reduce(function (sum, e) { return sum + (Number(e.balance_due) || 0); }, 0);
+      const overdueN = q.filter(isOverdue).length;
       body = [
-        q.length ? h('p.queue-total', { text: q.length + ' to pay · ' + fmtMoney(total) + ' outstanding' }) : null,
+        stats([
+          { value: q.length, label: 'To pay', brand: true },
+          { value: fmtShort(total), label: 'Outstanding' },
+          { value: overdueN, label: 'Overdue', alert: overdueN > 0 },
+          { value: q.filter(function (e) { return e.status === 'PARTIAL'; }).length, label: 'Partially paid' },
+        ]),
         section('Approved, waiting for payment', q, { showEmpty: true, empty: 'Nothing to pay.', showSubmitter: true }),
         q.length ? h('button.btn', { type: 'button', text: '⬇  Export list for bank transfers (CSV)', onclick: exportToPay }) : null,
       ];
     } else {
       body = [
+        stats([
+          { value: byStatus(['NEEDS_INFO']).length, label: 'Need info', alert: byStatus(['NEEDS_INFO']).length > 0 },
+          { value: byStatus(['PENDING_APPROVAL']).length, label: 'Pending' },
+          { value: byStatus(['APPROVED', 'PARTIAL']).length, label: 'To be paid' },
+        ]),
         h('a.btn.btn-primary.btn-big', { href: '#/new' }, ['+ New expense']),
         section('Needs your info', byStatus(['NEEDS_INFO'])),
         section('In progress', byStatus(['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'PARTIAL']), { showEmpty: true, empty: 'Nothing in progress.' }),
@@ -297,7 +359,11 @@
     });
     return [
       h('div.filters', {}, [h('div.grid2', {}, [outletSel, statusSel]), search]),
-      h('p.queue-total', { text: rows.length + ' expense' + (rows.length === 1 ? '' : 's') + ' · ' + fmtMoney(total) }),
+      stats([
+        { value: rows.length, label: 'Shown', brand: true },
+        { value: fmtShort(total), label: 'Total' },
+        { value: rows.filter(isOverdue).length, label: 'Overdue', alert: rows.filter(isOverdue).length > 0 },
+      ]),
       rows.length ? null : h('p.empty', { text: 'Nothing matches.' }),
     ].concat(groups.map(function (g) {
       return h('section.section', {}, [h('h2.section-title', { text: g.day }), h('div.list', {}, g.items.map(function (e) { return expenseCard(e, true); }))]);
@@ -397,11 +463,15 @@
     if (silent) toast('Updated: ' + label('status', e.status));
     mount(page([
       backLink(),
-      attachmentView(e.attachment),
+      h('div.detail-grid', {}, [
+      h('div.detail-media', {}, [
+        attachmentView(e.attachment),
+      ]),
+      h('div.detail-side', {}, [
       e.flags.length ? h('div.flags', {}, e.flags.map(function (f) {
         return f.level === 'info' ? h('div.flag.info', { text: 'ℹ ' + f.message }) : h('div.flag', { text: '⚠ ' + f.message });
       })) : null,
-      h('div.card', {}, [
+      h('div.card', { 'data-status': e.status }, [
         h('div.item-top', {}, [h('span.amount.big', { text: fmtMoney(e.amount_total) }), statusChip(e.status)]),
         h('div.item-mid', { text: categoryLabel(e.expense_category) + ' · ' + label('request_type', e.request_type) }),
         row('Submitted by', e.submitted_by_name + ' · ' + e.outlet_code),
@@ -424,19 +494,21 @@
         row('Balance due', e.status === 'PARTIAL' ? fmtMoney(e.balance_due) : ''),
         row('ID', e.expense_id),
       ]),
+      e.can.decide ? decisionPanel(e) : null,
       e.can.approveSupplier ? supplierApprovalCard(e) : null,
       e.pay_blocked ? h('div.flag', { text: '⛔ ' + e.pay_blocked }) : null,
       e.pay_to && e.can.pay ? payToCard(e.pay_to) : null,
       e.can.pay ? paymentPanel(e) : null,
       e.can.postCheck ? postCheckPanel(e) : null,
       e.payments && e.payments.length ? h('h2.section-title', { text: 'Payments' }) : null,
-      e.payments && e.payments.length ? h('div.list', {}, e.payments.map(paymentCard)) : null,
-      e.can.decide ? decisionPanel(e) : null,
+      e.payments && e.payments.length ? h('div.list.single', {}, e.payments.map(paymentCard)) : null,
       e.can.edit ? h('a.btn' + (e.status === 'NEEDS_INFO' ? '.btn-primary.btn-big' : ''), { href: '#/edit/' + encodeURIComponent(e.expense_id) },
         [e.status === 'NEEDS_INFO' ? 'Edit and resubmit' : 'Edit']) : null,
       e.can.cancel ? cancelPanel(e) : null,
       h('h2.section-title', { text: 'History' }),
       timelineView(e.timeline),
+      ]),
+      ]),
     ]), silent);
   }
 
