@@ -90,6 +90,15 @@
     const c = state.ref.categories.find(function (x) { return x.value === code; });
     return c ? c.label : code;
   }
+  // One or two words for tiles and lists; the full wording from the Sheet stays in the detail view.
+  const CATEGORY_SHORT = {
+    FOOD: 'Food', SUPPLIES: 'Supplies', RENT: 'Rent', UTILITIES: 'Utilities', MAINTENANCE: 'Repairs',
+    MARKETING: 'Marketing', GIFTS: 'Gifts', STAFF: 'Staff costs', EQUIPMENT: 'Equipment', OTHER: 'Other',
+  };
+  function categoryShort(code) {
+    if (CATEGORY_SHORT[code]) return CATEGORY_SHORT[code];
+    return String(categoryLabel(code)).split(',')[0];   // categories added later in the Sheet
+  }
 
   const STATUS_TONE = {
     NEEDS_INFO: 'warn', PENDING_APPROVAL: 'info', APPROVED: 'info', PARTIAL: 'info',
@@ -174,7 +183,7 @@
     return h('a.item', { href: '#/expense/' + encodeURIComponent(e.expense_id), 'data-status': e.status }, [
       h('div.item-body', {}, [
         h('div.item-top', {}, [h('span.amount', { text: fmtMoney(e.status === 'PARTIAL' ? e.balance_due : e.amount_total) + (e.status === 'PARTIAL' ? ' left' : '') }), statusChip(e.status)]),
-        h('div.item-mid', { text: categoryLabel(e.expense_category) + (e.supplier_name ? ' · ' + e.supplier_name : e.description ? ' · ' + e.description : '') }),
+        h('div.item-mid', { text: categoryShort(e.expense_category) + (e.supplier_name ? ' · ' + e.supplier_name : e.description ? ' · ' + e.description : '') }),
         h('div.item-meta', {}, [
           h('span', { text: e.expense_id }),
           h('span', { text: fmtDate(e.created_at) }),
@@ -845,9 +854,12 @@
 
     function paintButton() {
       const partial = amount > 0 && amount < balance;
+      const over = amount > balance;
       btn.textContent = partial ? 'Record partial payment' : 'Mark as paid';
-      hint.textContent = partial ? 'Balance after this payment: ' + fmtMoney(balance - amount) : '';
-      hint.hidden = !partial;
+      hint.textContent = over ? 'More than the balance due (' + fmtMoney(balance) + ').'
+        : partial ? 'Balance after this payment: ' + fmtMoney(balance - amount) : '';
+      hint.classList.toggle('over', over);
+      hint.hidden = !partial && !over;
       words.textContent = amount ? amountInWords(amount) : '';
     }
     const hint = h('p.hint', { hidden: true });
@@ -1058,7 +1070,7 @@
       const parts = [];
       if (Number(values.amount_total)) parts.push(fmtMoney(values.amount_total));
       const cat = state.ref.categories.find(function (c) { return c.value === values.expense_category; });
-      if (cat) parts.push(cat.label);
+      if (cat) parts.push(categoryShort(cat.value));
       const to = editing ? null : (state.ref.sendTo[values.outlet_code] || []).find(function (o) { return o.value === values.send_to; });
       if (to) parts.push(to.kind === 'ACCOUNTANT' ? 'to the accountant' : 'to ' + to.label.replace(/^Ask /, '').replace(/ to approve$/, ''));
       summary.textContent = parts.join(' · ');
@@ -1253,13 +1265,24 @@
 
     // --- amount + category
     const amountField = field('amount_total', 'Total amount (incl. VAT)', moneyInput('amount_total', true));
-    const catGrid = h('div.cat-grid');
-    function paintCats() { catGrid.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.value === values.expense_category); }); }
+    const catGrid = h('div.cat-grid', { role: 'radiogroup', 'aria-label': 'Category' });
+    // Short names on the tiles; what the chosen one covers is spelled out underneath.
+    const catHint = h('p.hint.cat-hint');
+    function paintCats() {
+      catGrid.querySelectorAll('button').forEach(function (b) {
+        const on = b.dataset.value === values.expense_category;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-checked', on);
+      });
+      const full = values.expense_category ? categoryLabel(values.expense_category) : '';
+      catHint.textContent = full && full !== categoryShort(values.expense_category) ? 'Covers: ' + full : '';
+    }
     state.ref.categories.forEach(function (c) {
-      catGrid.appendChild(h('button.chip-btn', { type: 'button', 'data-value': c.value, text: c.label, onclick: function () { set('expense_category', c.value); paintCats(); } }));
+      catGrid.appendChild(h('button.chip-btn', { type: 'button', role: 'radio', 'data-value': c.value, text: categoryShort(c.value), title: c.label,
+        onclick: function () { set('expense_category', c.value); paintCats(); } }));
     });
     paintCats();
-    const catField = field('expense_category', 'Category', catGrid);
+    const catField = field('expense_category', 'Category', h('div', {}, [catGrid, catHint]));
 
     // --- send to
     const sendToList = h('div.radios');

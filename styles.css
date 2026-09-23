@@ -360,8 +360,11 @@ details.more-inline[open] > .input { margin-top: 6px; }
 .dropzone.compact { min-height: 48px; border-width: 1px; }
 .dropzone.compact .dropzone-sub { display: none; }
 .nodoc-toggle { align-self: flex-start; margin-top: -8px; color: var(--muted); }
-.cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px; }
-.cat-grid .chip-btn { min-height: 48px; text-align: left; line-height: 1.25; }
+.cat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+@media (min-width: 560px) { .cat-grid { grid-template-columns: repeat(5, 1fr); } }
+.cat-grid .chip-btn { min-height: 44px; padding: 8px 6px; text-align: center; line-height: 1.2; }
+.cat-hint { margin-top: 6px; min-height: 1.2em; }
+.hint.over { color: var(--bad); font-weight: 600; }
 .field.has-error .choice, .field.has-error .cat-grid .chip-btn, .field.has-error .dropzone { border-color: var(--bad); }
 .submit-summary { margin: 0 0 8px; text-align: center; font-size: .9rem; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
 .sticky-submit:has(.submit-summary:not([hidden])) { padding-top: 8px; border-top: 1px solid var(--line); background: var(--bg); }
