@@ -328,3 +328,14 @@ details.more-inline[open] > .input { margin-top: 6px; }
   *, *::before, *::after { transition-duration: .01ms !important; animation-duration: 1.2s !important; scroll-behavior: auto !important; }
   .toast { transition: none; }
 }
+
+/* --- Payment double-check, accountant review, voided payments --- */
+.stack { display: flex; flex-direction: column; gap: 10px; }
+.stack[hidden] { display: none; }
+.hint.words { margin-top: 4px; font-style: italic; }
+.review-amount { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--muted-bg); }
+.review-proof { display: block; max-width: 100%; max-height: 360px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; cursor: zoom-in; }
+.flag.warn { background: var(--warn-bg); color: var(--warn); border-left-color: var(--warn); }
+.check-row { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-weight: 600; font-size: .92rem; cursor: pointer; }
+.check-row input { flex: 0 0 auto; width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--navy); }
+.amount.struck { text-decoration: line-through; color: var(--muted); }

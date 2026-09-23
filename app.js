@@ -52,6 +52,27 @@
 
   const money = new Intl.NumberFormat('en-US');
   function fmtMoney(n) { return n === '' || n === null || n === undefined ? '' : money.format(Number(n)) + ' ₫'; }
+  /** "350,000" → "three hundred fifty thousand dong": catches a missing or extra zero before money is recorded. */
+  function amountInWords(n) {
+    n = Math.round(Number(n) || 0);
+    if (!n) return 'zero dong';
+    const ones = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
+      'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+    const tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+    const small = function (x) {
+      const out = [];
+      if (x >= 100) { out.push(ones[Math.floor(x / 100)] + ' hundred'); x %= 100; }
+      if (x >= 20) out.push(tens[Math.floor(x / 10)] + (x % 10 ? '-' + ones[x % 10] : ''));
+      else if (x) out.push(ones[x]);
+      return out.join(' ');
+    };
+    const words = [];
+    [[1e9, 'billion'], [1e6, 'million'], [1e3, 'thousand']].forEach(function (s) {
+      if (n >= s[0]) { words.push(small(Math.floor(n / s[0])) + ' ' + s[1]); n %= s[0]; }
+    });
+    if (n) words.push(small(n));
+    return words.join(' ') + ' dong';
+  }
   function fmtDate(iso) {
     if (!iso) return '';
     const d = new Date(iso);
@@ -140,12 +161,12 @@
 
   /** Replaces or inserts an expense in a view list (keeps local state fresh without a reload). */
   function upsert(view, item) {
-    const list = state.views[view];
+    const list = state.views[view] || (state.views[view] = []);
     const i = list.findIndex(function (x) { return x.expense_id === item.expense_id; });
     if (i === -1) list.unshift(item); else list[i] = item;
   }
   function removeFrom(view, id) {
-    state.views[view] = state.views[view].filter(function (x) { return x.expense_id !== id; });
+    state.views[view] = (state.views[view] || []).filter(function (x) { return x.expense_id !== id; });
   }
 
   function expenseCard(e, showSubmitter) {
@@ -414,6 +435,7 @@
     REJECT: 'Rejected', REQUEST_INFO: 'Asked for more info', RESUBMIT: 'Resubmitted',
     EDIT: 'Edited', EDIT_NEEDS_REAPPROVAL: 'Edited — needs approval again', CANCEL: 'Cancelled', POST_CHECK: 'Cash payment post-checked',
     PAY_FULL: 'Paid in full', PAY_PARTIAL: 'Partial payment',
+    REVIEW_REQUEST: 'Accountant asked for a review', PAY_VOID: 'Payment record voided',
   };
 
   function timelineView(items) {
@@ -424,12 +446,12 @@
       if (last && last.at === t.at && last.action === t.action) { if (t.field) last.fields.push(t); return; }
       lines.push({ at: t.at, by: t.by, action: t.action, fields: t.field ? [t] : [] });
     });
-    const isReason = function (f) { return ['info_request', 'rejection_reason', 'payment', 'cancel_reason', 'post_check_note'].indexOf(f.field) !== -1; };
+    const isReason = function (f) { return ['info_request', 'rejection_reason', 'payment', 'cancel_reason', 'post_check_note', 'review_request', 'void', 'void_reason'].indexOf(f.field) !== -1; };
     return h('ol.timeline', {}, lines.map(function (l) {
       const note = l.fields.filter(isReason).map(function (f) {
-        if (f.field !== 'payment') return '"' + f.value + '"';
+        if (f.field !== 'payment' && f.field !== 'void') return '"' + f.value + '"';
         const parts = String(f.value).split(' ');   // "PAY-0001 500000 FULL"
-        return parts[0] + ' · ' + fmtMoney(parts[1]);
+        return (f.field === 'void' ? 'Voided ' : '') + parts[0] + ' · ' + fmtMoney(parts[1]);
       }).join(' ');
       const changed = l.fields.filter(function (f) { return !isReason(f); }).map(function (f) { return f.field.replace(/_/g, ' '); }).join(', ');
       return h('li', {}, [
@@ -499,9 +521,10 @@
       e.pay_blocked ? h('div.flag', { text: e.pay_blocked }) : null,
       e.pay_to && e.can.pay ? payToCard(e.pay_to) : null,
       e.can.pay ? paymentPanel(e) : null,
+      e.can.requestReview ? reviewRequestPanel(e) : null,
       e.can.postCheck ? postCheckPanel(e) : null,
       e.payments && e.payments.length ? h('h2.section-title', { text: 'Payments' }) : null,
-      e.payments && e.payments.length ? h('div.list.single', {}, e.payments.map(paymentCard)) : null,
+      e.payments && e.payments.length ? h('div.list.single', {}, e.payments.map(function (p) { return paymentCard(p, e); })) : null,
       e.can.edit ? h('a.btn' + (e.status === 'NEEDS_INFO' ? '.btn-primary.btn-big' : ''), { href: '#/edit/' + encodeURIComponent(e.expense_id) },
         [e.status === 'NEEDS_INFO' ? 'Edit and resubmit' : 'Edit']) : null,
       e.can.cancel ? cancelPanel(e) : null,
@@ -645,6 +668,52 @@
     });
   }
 
+  /** Accountant: "this looks wrong" → back to an owner/admin before anything is paid. */
+  function reviewRequestPanel(e) {
+    const opts = e.review_options || [];
+    const panel = h('div.decide');
+    const select = h('select.input', { id: 'review_to' }, [h('option', { value: '', text: 'Choose who should check it' })]
+      .concat(opts.map(function (o) { return h('option', { value: o.value, text: o.label }); })));
+    if (opts.length === 1) select.value = opts[0].value;
+    const box = h('textarea.input', { id: 'review_reason', rows: 3, placeholder: 'e.g. The invoice total does not match the amount' });
+    const err = h('p.error', { hidden: true });
+    function collapsed() {
+      panel.textContent = '';
+      panel.appendChild(h('button.btn', { type: 'button', text: 'Something looks wrong? Ask an owner to review', onclick: expanded }));
+    }
+    function expanded() {
+      panel.textContent = '';
+      err.hidden = true;
+      panel.appendChild(h('h2.section-title', { text: 'Ask an owner to review' }));
+      panel.appendChild(h('p.hint', { text: 'It goes back to the person you choose and cannot be paid until they approve it again. The submitter is not told.' }));
+      if (!opts.length) {
+        panel.appendChild(h('p.error', { text: 'No other owner or admin is active to review this.' }));
+        panel.appendChild(h('button.btn', { type: 'button', text: 'Back', onclick: collapsed }));
+        return;
+      }
+      const send = h('button.btn.btn-primary', { type: 'button', text: 'Send for review' });
+      send.addEventListener('click', async function () {
+        const reason = box.value.trim();
+        if (!select.value) { err.textContent = 'Choose who should review it.'; err.hidden = false; select.focus(); return; }
+        if (!reason) { err.textContent = 'Write what looks wrong.'; err.hidden = false; box.focus(); return; }
+        send.disabled = true;
+        try {
+          const res = await Api.call('requestReview', { id: e.expense_id, reviewer_id: select.value, reason: reason });
+          afterAction(res, 'Sent to ' + select.options[select.selectedIndex].text + ' for review: ' + e.expense_id);
+        } catch (ex) { err.textContent = ex.message; err.hidden = false; send.disabled = false; }
+      });
+      panel.appendChild(h('label.label', { for: 'review_to', text: 'Who should check it?' }));
+      panel.appendChild(select);
+      panel.appendChild(h('label.label', { for: 'review_reason', text: 'What looks wrong? (required)' }));
+      panel.appendChild(box);
+      panel.appendChild(err);
+      panel.appendChild(h('div.row', {}, [h('button.btn', { type: 'button', text: 'Back', onclick: collapsed }), send]));
+      box.focus();
+    }
+    collapsed();
+    return panel;
+  }
+
   function supplierApprovalCard(e) {
     const s = e.supplier;
     const btn = h('button.btn.btn-approve', { type: 'button', text: 'Approve supplier' });
@@ -716,10 +785,15 @@
     ]);
   }
 
-  function paymentCard(p) {
+  function paymentCard(p, e) {
     const proofUrl = p.proof && p.proof.base64 ? URL.createObjectURL(base64ToBlob(p.proof.base64, p.proof.mime)) : null;
+    const reversal = p.payment_seq === 'REVERSAL';
+    const chip = reversal ? h('span.chip.bad', { text: 'Voids ' + p.reverses_payment_id })
+      : p.voided ? h('span.chip.muted', { text: 'Voided' })
+      : h('span.chip.ok', { text: label('payment_seq', p.payment_seq) });
     return h('div.item', {}, [
-      h('div.item-top', {}, [h('span.amount', { text: fmtMoney(p.amount) }), h('span.chip.ok', { text: label('payment_seq', p.payment_seq) })]),
+      h('div.item-top', {}, [h('span.amount' + (p.voided ? '.struck' : ''), { text: fmtMoney(p.amount) }), chip]),
+      reversal && p.note ? h('div.item-note.bad', { text: 'Reason: ' + p.note }) : null,
       h('div.item-meta', {}, [
         h('span', { text: p.payment_id }),
         h('span', { text: fmtDate(p.paid_at) }),
@@ -729,6 +803,19 @@
       ]),
       proofUrl && p.proof.mime.indexOf('image/') === 0 ? h('img.proof-thumb', { src: proofUrl, alt: 'Transfer confirmation', onclick: function () { openViewer(proofUrl); } }) : null,
       proofUrl && p.proof.mime === 'application/pdf' ? h('a.link', { href: proofUrl, target: '_blank', rel: 'noopener', text: 'Open transfer confirmation (PDF)' }) : null,
+      p.can_void ? confirmPanel({
+        open: 'Recorded by mistake? Void this payment', danger: true, required: true,
+        intro: 'Only for a payment recorded wrongly (wrong amount, wrong expense, recorded twice). Nothing is deleted: a reversal is added to the history and the owners are told.',
+        label: 'What was wrong? (required)', placeholder: 'e.g. Typed 3,500,000 instead of 350,000',
+        confirm: 'Void ' + p.payment_id,
+        run: async function (reason) {
+          const res = await Api.call('voidPayment', { id: e.expense_id, payment_id: p.payment_id, reason: reason });
+          upsert('to_pay', res.expense);
+          state.detail = null;
+          toast('Voided ' + p.payment_id + ' · ' + label('status', res.expense.status), 'ok');
+          renderExpense(e.expense_id);
+        },
+      }) : null,
     ]);
   }
 
@@ -761,8 +848,10 @@
       btn.textContent = partial ? 'Record partial payment' : 'Mark as paid';
       hint.textContent = partial ? 'Balance after this payment: ' + fmtMoney(balance - amount) : '';
       hint.hidden = !partial;
+      words.textContent = amount ? amountInWords(amount) : '';
     }
     const hint = h('p.hint', { hidden: true });
+    const words = h('p.hint.words');
 
     amountInput.addEventListener('input', function () {
       const digits = amountInput.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '');
@@ -794,14 +883,80 @@
         .finally(function () { preparing = null; paintProof(); });
     });
 
-    async function submit() {
+    const formWrap = h('div.stack');
+    const reviewWrap = h('div.stack', { hidden: true });
+
+    /** Step 1: catch the obvious mistakes before showing the summary. */
+    async function review() {
+      if (busy) return;
+      err.hidden = true;
+      if (preparing) { btn.disabled = true; btn.textContent = 'Preparing photo…'; await preparing; btn.disabled = false; paintButton(); }
+      const problem = !(amount > 0) ? 'Enter the amount paid.'
+        : amount > balance ? 'That is more than the balance due (' + fmtMoney(balance) + ').'
+        : !dateInput.value ? 'Choose the payment date.'
+        : methodSelect.value === 'BANK_TRANSFER' && !proof ? 'Attach the transfer confirmation first.'
+        : '';
+      if (problem) { err.textContent = problem; err.hidden = false; return; }
+      showReview();
+    }
+
+    /** Step 2: the double-check. Nothing is saved until the accountant ticks the box. */
+    function showReview() {
+      const to = e.pay_to || {};
+      const partial = amount < balance;
+      const cash = methodSelect.value === 'CASH';
+      const warnings = [];
+      if (partial) warnings.push('Partial payment: ' + fmtMoney(balance - amount) + ' will still be owed.');
+      if (dateInput.value !== todayVN()) warnings.push('The payment date is not today: ' + fmtDate(dateInput.value) + '.');
+      if (!cash && !to.account) warnings.push('No bank account is on file for this payee. Check where the money went.');
+      if (to.source === 'payee') warnings.push('The money goes to an account the submitter gave, not the supplier\'s registered account.');
+      if (cash) warnings.push('Cash: the outlet manager will be asked to confirm it afterwards.');
+
+      const tick = h('input', { type: 'checkbox', id: 'pay_checked' });
+      const confirmBtn = h('button.btn.btn-approve.btn-big', { type: 'button', text: partial ? 'Confirm partial payment' : 'Confirm and mark as paid', disabled: true });
+      tick.addEventListener('change', function () { confirmBtn.disabled = !tick.checked || busy; });
+      confirmBtn.addEventListener('click', function () { submit(confirmBtn); });
+      const row = function (k, v) { return h('div.kv', {}, [h('span.k', { text: k }), h('span.v', { text: v || '—' })]); };
+      const proofSrc = proof && proof.mime.indexOf('image/') === 0 ? 'data:' + proof.mime + ';base64,' + proof.base64 : null;
+
+      reviewWrap.textContent = '';
+      reviewWrap.appendChild(h('p.confirm-text', { text: 'Check before saving' }));
+      reviewWrap.appendChild(h('div.review-amount', {}, [
+        h('span.amount.big', { text: fmtMoney(amount) }),
+        h('span.hint', { text: amountInWords(amount) }),
+      ]));
+      reviewWrap.appendChild(h('div', {}, [
+        row('Pay to', to.name),
+        row('Account', cash ? 'Cash' : [to.bank, to.account].filter(Boolean).join(' · ')),
+        row('Paid on', fmtDate(dateInput.value)),
+        row('Method', label('payment_method', methodSelect.value)),
+        row('Balance before', fmtMoney(balance)),
+        row('Balance after', fmtMoney(balance - amount)),
+      ]));
+      if (proofSrc) reviewWrap.appendChild(h('img.review-proof', { src: proofSrc, alt: 'Transfer confirmation', onclick: function () { openViewer(proofSrc); } }));
+      else if (proof) reviewWrap.appendChild(h('p.hint', { text: 'Transfer confirmation attached (PDF): ' + proof.name }));
+      warnings.forEach(function (w) { reviewWrap.appendChild(h('div.flag.warn', { text: w })); });
+      reviewWrap.appendChild(h('label.check-row', { for: 'pay_checked' }, [tick, h('span', {
+        text: cash ? 'I confirm this amount was paid in cash.' : 'I compared the transfer confirmation with the amount and account above. They match.',
+      })]));
+      reviewWrap.appendChild(h('div.row', {}, [h('button.btn', { type: 'button', text: 'Back', onclick: showForm }), confirmBtn]));
+      formWrap.hidden = true;
+      reviewWrap.hidden = false;
+      reviewWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    function showForm() {
+      err.hidden = true;
+      reviewWrap.hidden = true;
+      formWrap.hidden = false;
+    }
+
+    async function submit(confirmBtn) {
       if (busy) return;
       err.hidden = true;
       busy = true;
-      btn.disabled = true;
+      confirmBtn.disabled = true;
       try {
-        if (preparing) { btn.textContent = 'Preparing photo…'; await preparing; }
-        btn.textContent = 'Saving…';
+        confirmBtn.textContent = 'Saving…';
         const res = await Api.call('recordPayment', {
           id: e.expense_id,
           amount: amount,
@@ -818,29 +973,35 @@
       } catch (ex) {
         err.textContent = ex.details && ex.details.length ? ex.details.map(function (d) { return d.message; }).join(' ') : ex.message;
         err.hidden = false;
+        confirmBtn.textContent = 'Try again';
+        confirmBtn.disabled = false;
       } finally {
         busy = false;
-        btn.disabled = false;
-        paintButton();
       }
     }
-    btn.addEventListener('click', submit);
+    btn.addEventListener('click', review);
     paintButton();
+
+    amountInput.id = 'pay_amount';
+    dateInput.id = 'pay_date';
+    methodSelect.id = 'pay_method';
+    [fileInput, proofBox,
+      h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['Attach transfer confirmation']),
+      h('div.field', {}, [h('label.label', { for: 'pay_amount', text: 'Amount paid' }), h('div.money-wrap', {}, [amountInput, h('span.suffix', { text: '₫' })]), words, hint]),
+      h('div.grid2', {}, [
+        h('div.field', {}, [h('label.label', { for: 'pay_date', text: 'Paid on' }), dateInput]),
+        h('div.field', {}, [h('label.label', { for: 'pay_method', text: 'Method' }), methodSelect]),
+      ]),
+      h('details.more-inline', {}, [h('summary', { text: 'Paid from which account? (optional)' }), sourceInput]),
+      btn,
+    ].forEach(function (n) { formWrap.appendChild(n); });
 
     return h('div.decide', {}, [
       h('h2.section-title', { text: 'Record payment' }),
-      h('p.hint', { text: 'Transfer the money in your bank app first, then record it here.' }),
-      fileInput,
-      proofBox,
-      h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['Attach transfer confirmation']),
-      h('div.field', {}, [h('label.label', { text: 'Amount paid' }), h('div.money-wrap', {}, [amountInput, h('span.suffix', { text: '₫' })]), hint]),
-      h('div.grid2', {}, [
-        h('div.field', {}, [h('label.label', { text: 'Paid on' }), dateInput]),
-        h('div.field', {}, [h('label.label', { text: 'Method' }), methodSelect]),
-      ]),
-      h('details.more-inline', {}, [h('summary', { text: 'Paid from which account? (optional)' }), sourceInput]),
+      h('p.hint', { text: 'Transfer the money in your bank app first, then record it here. You will see a summary to check before anything is saved.' }),
+      formWrap,
+      reviewWrap,
       err,
-      btn,
     ]);
   }
 
