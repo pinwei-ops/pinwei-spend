@@ -1049,8 +1049,21 @@
     let preparing = null;       // promise while compressing
     let submitting = false;
     const fieldEls = {};        // field -> wrapper, for error display
+    const summary = h('p.submit-summary', { hidden: true, 'aria-live': 'polite' });
 
-    function set(field, value) { values[field] = value; if (!editing) saveDraft(values); clearError(field); }
+    function set(field, value) { values[field] = value; if (!editing) saveDraft(values); clearError(field); paintSummary(); }
+
+    /** One line above Submit: what is about to be sent, so nothing needs scrolling back up. */
+    function paintSummary() {
+      const parts = [];
+      if (Number(values.amount_total)) parts.push(fmtMoney(values.amount_total));
+      const cat = state.ref.categories.find(function (c) { return c.value === values.expense_category; });
+      if (cat) parts.push(cat.label);
+      const to = editing ? null : (state.ref.sendTo[values.outlet_code] || []).find(function (o) { return o.value === values.send_to; });
+      if (to) parts.push(to.kind === 'ACCOUNTANT' ? 'to the accountant' : 'to ' + to.label.replace(/^Ask /, '').replace(/ to approve$/, ''));
+      summary.textContent = parts.join(' · ');
+      summary.hidden = !parts.length;
+    }
 
     function field(name, labelText, control, hint) {
       const id = 'f_' + name;
@@ -1080,6 +1093,7 @@
       }
     }
     function showError(name, message) {
+      if (name === 'no_doc_reason' && typeof openNoDoc === 'function') openNoDoc(true);
       const w = fieldEls[name] || fieldEls._form;
       w.classList.add('has-error');
       const p = w.querySelector('.error');
@@ -1109,16 +1123,31 @@
       errorSummary.focus({ preventScroll: true });
     }
 
-    function segmented(name, options) {
-      const wrap = h('div.segmented', { role: 'radiogroup', style: 'grid-template-columns: repeat(' + options.length + ', 1fr)' });
+    /** Large tappable options, each with a one-line explanation (a radio group). */
+    function choices(name, options, cols, ariaLabel) {
+      const wrap = h('div.choices' + (cols ? '.cols-' + cols : ''), { role: 'radiogroup', 'aria-label': ariaLabel || null });
       function paint() {
-        wrap.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.value === values[name]); b.setAttribute('aria-checked', b.dataset.value === values[name]); });
+        wrap.querySelectorAll('button').forEach(function (b) {
+          const on = b.dataset.value === values[name];
+          b.classList.toggle('on', on);
+          b.setAttribute('aria-checked', on);
+        });
       }
       options.forEach(function (o) {
-        wrap.appendChild(h('button', { type: 'button', role: 'radio', 'data-value': o.value, text: o.label, onclick: function () { set(name, o.value); paint(); if (o.onpick) o.onpick(); } }));
+        wrap.appendChild(h('button.choice', { type: 'button', role: 'radio', 'data-value': o.value, onclick: function () { set(name, o.value); paint(); if (o.onpick) o.onpick(); } }, [
+          h('span.choice-title', { text: o.label }),
+          o.sub ? h('span.choice-sub', { text: o.sub }) : null,
+        ]));
       });
       paint();
       return wrap;
+    }
+
+    /** A section card with a step number, so the form reads as four short steps. */
+    function section(num, title, children) {
+      return h('section.form-section', {}, [
+        h('h2.form-step', {}, [h('span.step-num', { text: String(num), 'aria-hidden': 'true' }), h('span', { text: title })]),
+      ].concat(children));
     }
 
     function select(name, options, placeholder) {
@@ -1134,32 +1163,51 @@
       return el;
     }
 
-    function moneyInput(name) {
-      const el = h('input.input.money', { inputmode: 'numeric', autocomplete: 'off', placeholder: '0', oninput: function () {
+    /** withWords: the main amount also shows in words, which catches a missing or extra zero. */
+    function moneyInput(name, withWords) {
+      const words = withWords ? h('p.hint.words') : null;
+      const paintWords = function () { if (words) words.textContent = Number(values[name]) ? amountInWords(values[name]) : ''; };
+      const el = h('input.input.money', { inputmode: 'numeric', autocomplete: 'off', placeholder: withWords ? 'Enter amount' : '0', oninput: function () {
         const digits = el.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '');
         el.value = digits ? money.format(Number(digits)) : '';
         set(name, digits);
+        paintWords();
       } });
       el.value = values[name] ? money.format(Number(values[name])) : '';
-      return h('div.money-wrap', {}, [el, h('span.suffix', { text: '₫' })]);
+      paintWords();
+      const wrap = h('div.money-wrap', {}, [el, h('span.suffix', { text: '₫' })]);
+      return words ? h('div', {}, [wrap, words]) : wrap;
     }
 
     // --- request type
-    const typeField = field('request_type', 'What is this?', segmented('request_type', [
-      { value: 'INVOICE', label: 'I have an invoice', onpick: function () { if (!editing) refreshSendTo(); } },
-      { value: 'PURCHASE_REQUEST', label: 'Purchase request', onpick: function () { if (!editing) refreshSendTo(true); } },
-    ]));
+    const typeField = field('request_type', null, choices('request_type', [
+      { value: 'INVOICE', label: 'Already bought', sub: 'I have an invoice or receipt', onpick: function () { if (!editing) refreshSendTo(); } },
+      { value: 'PURCHASE_REQUEST', label: 'Not bought yet', sub: 'Ask for approval before buying', onpick: function () { if (!editing) refreshSendTo(true); } },
+    ], 2, 'What is this?'));
 
     // --- attachment
     const fileInput = h('input', { type: 'file', accept: 'image/*,application/pdf', hidden: true, onchange: function () { if (fileInput.files[0]) pickFile(fileInput.files[0]); } });
     const preview = h('div.preview');
-    const noDocSelect = select('no_doc_reason', state.ref.enums.filter(function (e) { return e.field === 'no_doc_reason'; }), 'Why is there no document?');
-    const noDocField = field('no_doc_reason', 'No photo?', noDocSelect);
-    const fileField = field('file', 'Invoice photo', h('div', {}, [
-      fileInput,
-      preview,
-      h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['Take or choose photo']),
-    ]), 'A clear photo of the invoice, delivery note or quote. PDF works too.');
+    const noDocSelect = select('no_doc_reason', state.ref.enums.filter(function (e) { return e.field === 'no_doc_reason'; }), 'Choose a reason');
+    const noDocField = field('no_doc_reason', 'Why is there no document?', noDocSelect);
+    // The reason picker stays out of the way until someone says they have no document.
+    let noDocOpen = Boolean(values.no_doc_reason);
+    const noDocToggle = h('button.link.nodoc-toggle', { type: 'button', text: 'No document? Choose a reason instead', onclick: function () { openNoDoc(true); } });
+    function openNoDoc(focus) { noDocOpen = true; paintAttachment(); if (focus) noDocSelect.focus(); }
+    const dropTitle = h('span.dropzone-title', { text: 'Take or choose a photo' });
+    const dropzone = h('button.dropzone', { type: 'button', onclick: function () { fileInput.click(); } }, [
+      dropTitle,
+      h('span.dropzone-sub', { text: 'Invoice, delivery note or quote. PDF works too.' }),
+    ]);
+    // Desktop: a file can also be dragged onto the box.
+    ['dragenter', 'dragover'].forEach(function (t) { dropzone.addEventListener(t, function (ev) { ev.preventDefault(); dropzone.classList.add('drag'); }); });
+    ['dragleave', 'drop'].forEach(function (t) { dropzone.addEventListener(t, function () { dropzone.classList.remove('drag'); }); });
+    dropzone.addEventListener('drop', function (ev) {
+      ev.preventDefault();
+      const f = ev.dataTransfer && ev.dataTransfer.files[0];
+      if (f) pickFile(f);
+    });
+    const fileField = field('file', 'Photo of the document', h('div', {}, [fileInput, preview, dropzone]));
 
     function paintAttachment(status) {
       preview.textContent = '';
@@ -1183,7 +1231,11 @@
           h('button.link', { type: 'button', text: 'Remove', onclick: function () { attachment = null; fileInput.value = ''; paintAttachment(); } }),
         ]));
       }
-      noDocField.hidden = Boolean(attachment || keptAttachment) || status === 'working';
+      const hasDoc = Boolean(attachment || keptAttachment);
+      dropzone.classList.toggle('compact', hasDoc);
+      dropTitle.textContent = hasDoc ? 'Replace photo' : 'Take or choose a photo';
+      noDocField.hidden = hasDoc || status === 'working' || !noDocOpen;
+      noDocToggle.hidden = hasDoc || status === 'working' || noDocOpen;
     }
 
     function pickFile(file) {
@@ -1200,8 +1252,8 @@
     }
 
     // --- amount + category
-    const amountField = field('amount_total', 'Total amount (incl. VAT)', moneyInput('amount_total'));
-    const catGrid = h('div.chips');
+    const amountField = field('amount_total', 'Total amount (incl. VAT)', moneyInput('amount_total', true));
+    const catGrid = h('div.cat-grid');
     function paintCats() { catGrid.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.value === values.expense_category); }); }
     state.ref.categories.forEach(function (c) {
       catGrid.appendChild(h('button.chip-btn', { type: 'button', 'data-value': c.value, text: c.label, onclick: function () { set('expense_category', c.value); paintCats(); } }));
@@ -1227,10 +1279,11 @@
           h('span', { text: o.label }),
         ]));
       });
+      paintSummary();
     }
     const sendField = editing
       ? field('send_to', 'Goes back to', h('div.readonly', { text: existing.send_to_name }), 'The person who asked for more info reviews it again.')
-      : field('send_to', 'Send to', sendToList);
+      : field('send_to', null, sendToList);
     if (!editing) refreshSendTo();
 
     // --- who gets paid (supplier / someone else / me)
@@ -1286,12 +1339,12 @@
         if (approver) { values.send_to = approver.value; saveDraft(values); refreshSendTo(); }
       }
     }
-    const payeeField = field('payee_type', 'Who gets paid?', h('div', {}, [
-      segmented('payee_type', [
-        { value: 'SUPPLIER', label: 'Supplier', onpick: paintPayee },
-        { value: 'OTHER', label: 'Someone else', onpick: paintPayee },
-        { value: 'SUBMITTER', label: 'Me (I paid)', onpick: paintPayee },
-      ]),
+    const payeeField = field('payee_type', null, h('div', {}, [
+      choices('payee_type', [
+        { value: 'SUPPLIER', label: 'The supplier', sub: 'Into their bank account', onpick: paintPayee },
+        { value: 'OTHER', label: 'Someone else', sub: 'e.g. a delivery driver', onpick: paintPayee },
+        { value: 'SUBMITTER', label: 'Me', sub: 'I paid, pay me back', onpick: paintPayee },
+      ], 3, 'Who gets paid?'),
       payeeHint,
     ]));
     const payeeBlock = h('div.payee-block', {}, [payeeField, supplierField, otherFields]);
@@ -1397,11 +1450,16 @@
       editing && existing.status === 'APPROVED' && existing.send_to !== 'ACCOUNTANT'
         ? h('div.item-note', { text: 'Already approved. Changing the amount, the supplier or who gets paid sends it back for approval.' }) : null,
       editing && existing.info_request ? h('div.item-note', { text: 'Requested: ' + existing.info_request }) : null,
-      typeField, fileField, noDocField, amountField, catField, payeeBlock, sendField, descField, more,
+      section(1, 'What is it?', [typeField, fileField, noDocToggle, noDocField]),
+      section(2, 'How much?', [amountField, catField, descField]),
+      section(3, 'Who gets paid?', [payeeBlock]),
+      section(4, editing ? 'Who reviews it' : 'Send to', [sendField]),
+      more,
       formErrors, warnBox,
-      h('div.sticky-submit', {}, [submitBtn]),
+      h('div.sticky-submit', {}, [summary, submitBtn]),
     ]);
     paintAttachment();
+    paintSummary();
     mount(page([form]));
   }
 

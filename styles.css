@@ -339,3 +339,29 @@ details.more-inline[open] > .input { margin-top: 6px; }
 .check-row { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-weight: 600; font-size: .92rem; cursor: pointer; }
 .check-row input { flex: 0 0 auto; width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--navy); }
 .amount.struck { text-decoration: line-through; color: var(--muted); }
+
+/* --- Expense form: step sections, choice cards, photo drop zone --- */
+.form-section { display: flex; flex-direction: column; gap: 16px; padding: 18px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+.form-step { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 1.02rem; font-weight: 700; }
+.step-num { display: inline-grid; place-items: center; flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; background: var(--navy-soft); color: var(--accent); font-size: .82rem; font-weight: 700; }
+.choices { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.choices.cols-2 { grid-template-columns: 1fr 1fr; }
+@media (min-width: 560px) { .choices.cols-3 { grid-template-columns: repeat(3, 1fr); } }
+.choice { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; min-height: 64px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--input); color: var(--fg); font: inherit; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
+.choice:hover { border-color: var(--faint); }
+.choice.on { border-color: var(--action); box-shadow: inset 0 0 0 1px var(--action); background: var(--navy-soft); }
+.choice-title { font-weight: 600; }
+.choice.on .choice-title { color: var(--accent); }
+.choice-sub { font-size: .82rem; line-height: 1.3; color: var(--muted); }
+.dropzone { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 100%; min-height: 116px; padding: 16px; border: 2px dashed var(--faint); border-radius: var(--radius); background: var(--hover); color: var(--fg); font: inherit; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+.dropzone:hover, .dropzone.drag { border-color: var(--action); background: var(--navy-soft); }
+.dropzone-title { font-size: 1rem; font-weight: 700; color: var(--accent); }
+.dropzone-sub { font-size: .85rem; color: var(--muted); }
+.dropzone.compact { min-height: 48px; border-width: 1px; }
+.dropzone.compact .dropzone-sub { display: none; }
+.nodoc-toggle { align-self: flex-start; margin-top: -8px; color: var(--muted); }
+.cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px; }
+.cat-grid .chip-btn { min-height: 48px; text-align: left; line-height: 1.25; }
+.field.has-error .choice, .field.has-error .cat-grid .chip-btn, .field.has-error .dropzone { border-color: var(--bad); }
+.submit-summary { margin: 0 0 8px; text-align: center; font-size: .9rem; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sticky-submit:has(.submit-summary:not([hidden])) { padding-top: 8px; border-top: 1px solid var(--line); background: var(--bg); }
