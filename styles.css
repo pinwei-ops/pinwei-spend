@@ -368,3 +368,11 @@ details.more-inline[open] > .input { margin-top: 6px; }
 .field.has-error .choice, .field.has-error .cat-grid .chip-btn, .field.has-error .dropzone { border-color: var(--bad); }
 .submit-summary { margin: 0 0 8px; text-align: center; font-size: .9rem; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
 .sticky-submit:has(.submit-summary:not([hidden])) { padding-top: 8px; border-top: 1px solid var(--line); background: var(--bg); }
+
+/* Payment entries stack vertically: amount, details, proof, then the void action underneath */
+.pay-card { flex-direction: column; gap: 8px; }
+.pay-card .item-meta { margin-top: 0; }
+.pay-card .item-note { margin-top: 0; }
+.pay-card .proof-thumb { margin-top: 2px; }
+.pay-card > .decide { padding: 12px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; }
+.pay-card > .decide > .btn { align-self: flex-start; min-height: 40px; padding: 8px 14px; font-size: .9rem; }

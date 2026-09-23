@@ -800,7 +800,7 @@
     const chip = reversal ? h('span.chip.bad', { text: 'Voids ' + p.reverses_payment_id })
       : p.voided ? h('span.chip.muted', { text: 'Voided' })
       : h('span.chip.ok', { text: label('payment_seq', p.payment_seq) });
-    return h('div.item', {}, [
+    return h('div.item.pay-card', {}, [
       h('div.item-top', {}, [h('span.amount' + (p.voided ? '.struck' : ''), { text: fmtMoney(p.amount) }), chip]),
       reversal && p.note ? h('div.item-note.bad', { text: 'Reason: ' + p.note }) : null,
       h('div.item-meta', {}, [
