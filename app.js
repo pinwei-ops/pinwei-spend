@@ -181,6 +181,8 @@
   const EXPORT_MONTH_ROLES = ['OWNER', 'ADMIN', 'ACCOUNTANT'];
   let doneOpen = false;       // the collapsed "Done" list stays open across refreshes
   const allFilter = { outlet: '', status: 'OPEN', q: '' };
+  let payShow = '';           // "Show" dropdown on the Pay tab
+  let mineShow = '';          // "Show" dropdown on the Mine tab
   let homeTab = null;
 
   /** Replaces or inserts an expense in a view list (keeps local state fresh without a reload). */
@@ -238,6 +240,28 @@
     const list = items.length ? h('div.list', {}, items.map(function (e) { return expenseCard(e, opts.showSubmitter); })) : h('p.empty', { text: opts.empty });
     if (opts.collapsed) return h('details.section', { open: doneOpen, ontoggle: function (ev) { doneOpen = ev.currentTarget.open; } }, [h('summary', {}, [head]), list]);
     return h('section.section', {}, [head, list]);
+  }
+
+  /** A "Show: …" dropdown above a list. options: [[value, label], …] */
+  function showFilter(value, options, onChange) {
+    const sel = h('select.input', { 'aria-label': 'Show', onchange: function () { onChange(sel.value); renderHome(true); } },
+      options.map(function (o) { return h('option', { value: o[0], text: o[1] }); }));
+    sel.value = value;
+    return h('label.show-filter', {}, [h('span.show-label', { text: 'Show' }), sel]);
+  }
+
+  /** Every expense the user may see across outlets; loaded once, then kept fresh by Refresh. null while loading. */
+  let allLoading = false;
+  function allExpenses() {
+    if (state.views.all) return state.views.all;
+    if (!allLoading) {
+      allLoading = true;
+      Api.call('listExpenses', { view: 'all' }).then(function (res) {
+        state.views.all = res.expenses;
+        if (onHome()) renderHome(true);
+      }).catch(function (err) { toast(err.message); }).finally(function () { allLoading = false; });
+    }
+    return null;
   }
 
   /** Card that walks the user through linking Telegram (no webhook: they tap Start, then "Done"). */
@@ -334,15 +358,38 @@
       const q = state.views.to_pay;
       const total = q.reduce(function (sum, e) { return sum + (Number(e.balance_due) || 0); }, 0);
       const overdueN = q.filter(isOverdue).length;
+      const partialN = q.filter(function (e) { return e.status === 'PARTIAL'; }).length;
+      let listPart;
+      if (payShow === 'PAID') {
+        const all = allExpenses();
+        const since = Date.now() - 30 * 86400000;
+        const paid = (all || []).filter(function (e) { return (e.status === 'PAID' || e.status === 'CLOSED') && e.paid_at && new Date(e.paid_at).getTime() >= since; })
+          .sort(function (a, b) { return new Date(b.paid_at) - new Date(a.paid_at); });
+        listPart = all ? section('Paid in the last 30 days', paid, { showEmpty: true, empty: 'Nothing paid in the last 30 days.', showSubmitter: true }) : loading('Loading paid expenses…');
+      } else {
+        const shown = q.filter(function (e) {
+          if (payShow === 'OVERDUE') return isOverdue(e);
+          return !payShow || e.status === payShow;
+        });
+        const title = { '': 'Approved, waiting for payment', APPROVED: 'Approved, nothing paid yet', PARTIAL: 'Partially paid', OVERDUE: 'Overdue' }[payShow];
+        listPart = section(title, shown, { showEmpty: true, empty: payShow ? 'Nothing here.' : 'Nothing to pay.', showSubmitter: true });
+      }
       body = [
         stats([
           { value: q.length, label: 'To pay', brand: true },
           { value: fmtShort(total), label: 'Outstanding' },
           { value: overdueN, label: 'Overdue', alert: overdueN > 0 },
-          { value: q.filter(function (e) { return e.status === 'PARTIAL'; }).length, label: 'Partially paid' },
+          { value: partialN, label: 'Partially paid' },
         ]),
-        section('Approved, waiting for payment', q, { showEmpty: true, empty: 'Nothing to pay.', showSubmitter: true }),
-        q.length ? h('button.btn', { type: 'button', text: 'Export list for bank transfers (CSV)', onclick: exportToPay }) : null,
+        showFilter(payShow, [
+          ['', 'Everything to pay (' + q.length + ')'],
+          ['APPROVED', 'Approved, nothing paid yet (' + (q.length - partialN) + ')'],
+          ['PARTIAL', 'Partially paid (' + partialN + ')'],
+          ['OVERDUE', 'Overdue (' + overdueN + ')'],
+          ['PAID', 'Paid in the last 30 days'],
+        ], function (v) { payShow = v; }),
+        listPart,
+        q.length && payShow !== 'PAID' ? h('button.btn', { type: 'button', text: 'Export list for bank transfers (CSV)', onclick: exportToPay }) : null,
         monthExportRow(),
       ];
     } else {
@@ -353,10 +400,29 @@
           { value: byStatus(['APPROVED', 'PARTIAL']).length, label: 'To be paid' },
         ]),
         h('a.btn.btn-primary.btn-big', { href: '#/new' }, ['+ New expense']),
-        section('Needs your info', byStatus(['NEEDS_INFO'])),
-        section('In progress', byStatus(['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'PARTIAL']), { showEmpty: true, empty: 'Nothing in progress.' }),
-        section('Done', byStatus(['PAID', 'CLOSED', 'REJECTED', 'CANCELLED']), { collapsed: true }),
       ];
+      const MINE_SHOW = {
+        NEEDS_INFO: ['Needs your info', ['NEEDS_INFO']],
+        PENDING_APPROVAL: ['Waiting for approval', ['PENDING_APPROVAL']],
+        APPROVED: ['Approved, waiting for payment', ['APPROVED', 'PARTIAL']],
+        PAID: ['Paid', ['PAID', 'CLOSED']],
+        REJECTED: ['Rejected', ['REJECTED']],
+        CANCELLED: ['Cancelled', ['CANCELLED']],
+      };
+      if (mine.length) {
+        body.push(showFilter(mineShow, [['', 'Everything (' + mine.length + ')']].concat(Object.keys(MINE_SHOW).map(function (k) {
+          return [k, MINE_SHOW[k][0] + ' (' + byStatus(MINE_SHOW[k][1]).length + ')'];
+        })), function (v) { mineShow = v; }));
+      }
+      if (MINE_SHOW[mineShow]) {
+        body.push(section(MINE_SHOW[mineShow][0], byStatus(MINE_SHOW[mineShow][1]), { showEmpty: true, empty: 'Nothing here.' }));
+      } else {
+        body.push(
+          section('Needs your info', byStatus(['NEEDS_INFO'])),
+          section('In progress', byStatus(['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'PARTIAL']), { showEmpty: true, empty: 'Nothing in progress.' }),
+          section('Done', byStatus(['PAID', 'CLOSED', 'REJECTED', 'CANCELLED']), { collapsed: true })
+        );
+      }
     }
     body.push(state.user.telegramLinked ? telegramFooter() : telegramCard());
     const refreshed = h('p.refresh-line', {}, [
@@ -368,13 +434,7 @@
 
   /** Owner/admin timeline across every outlet (spec §8), loaded on first open. */
   function allView() {
-    if (!state.views.all) {
-      Api.call('listExpenses', { view: 'all' }).then(function (res) {
-        state.views.all = res.expenses;
-        if (homeTab === 'all' && onHome()) renderHome(true);
-      }).catch(function (err) { toast(err.message); });
-      return [loading('Loading all expenses…')];
-    }
+    if (!allExpenses()) return [loading('Loading all expenses…')];
     const OPEN = ['PENDING_APPROVAL', 'NEEDS_INFO', 'APPROVED', 'PARTIAL'];
     const q = allFilter.q.trim().toLowerCase();
     const rows = state.views.all.filter(function (e) {
