@@ -784,42 +784,39 @@
     return wrap;
   }
 
-  /** Accountant: "this looks wrong" → back to an owner/admin before anything is paid. */
+  /** Accountant: "this looks wrong" → back to whoever approved it (the owners if nobody did) before anything is paid. */
   function reviewRequestPanel(e) {
     const opts = e.review_options || [];
+    const target = opts[0];
     const panel = h('div.decide');
-    const select = h('select.input', { id: 'review_to' }, [h('option', { value: '', text: 'Choose who should check it' })]
-      .concat(opts.map(function (o) { return h('option', { value: o.value, text: o.label }); })));
-    if (opts.length === 1) select.value = opts[0].value;
     const box = h('textarea.input', { id: 'review_reason', rows: 3, placeholder: 'e.g. The invoice total does not match the amount' });
     const err = h('p.error', { hidden: true });
     function collapsed() {
       panel.textContent = '';
-      panel.appendChild(h('button.btn', { type: 'button', text: 'Something looks wrong? Ask an owner to review', onclick: expanded }));
+      panel.appendChild(h('button.btn', { type: 'button', text: 'Something looks wrong? Send back for review', onclick: expanded }));
     }
     function expanded() {
       panel.textContent = '';
       err.hidden = true;
-      panel.appendChild(h('h2.section-title', { text: 'Ask an owner to review' }));
-      panel.appendChild(h('p.hint', { text: 'It goes back to the person you choose and cannot be paid until they approve it again. The submitter is not told.' }));
-      if (!opts.length) {
-        panel.appendChild(h('p.error', { text: 'No other owner or admin is active to review this.' }));
+      panel.appendChild(h('h2.section-title', { text: 'Send back for review' }));
+      if (!target) {
+        panel.appendChild(h('p.error', { text: 'Nobody else is active to review this. Ask the admin.' }));
         panel.appendChild(h('button.btn', { type: 'button', text: 'Back', onclick: collapsed }));
         return;
       }
       const send = h('button.btn.btn-primary', { type: 'button', text: 'Send for review' });
       send.addEventListener('click', async function () {
         const reason = box.value.trim();
-        if (!select.value) { err.textContent = 'Choose who should review it.'; err.hidden = false; select.focus(); return; }
         if (!reason) { err.textContent = 'Write what looks wrong.'; err.hidden = false; box.focus(); return; }
         send.disabled = true;
         try {
-          const res = await Api.call('requestReview', { id: e.expense_id, reviewer_id: select.value, reason: reason });
-          afterAction(res, 'Sent to ' + select.options[select.selectedIndex].text + ' for review: ' + e.expense_id);
+          const res = await Api.call('requestReview', { id: e.expense_id, reviewer_id: target.value, reason: reason });
+          afterAction(res, 'Sent back to ' + target.label + ' for review: ' + e.expense_id);
         } catch (ex) { err.textContent = ex.message; err.hidden = false; send.disabled = false; }
       });
-      panel.appendChild(h('label.label', { for: 'review_to', text: 'Who should check it?' }));
-      panel.appendChild(select);
+      panel.appendChild(h('p.hint', {}, ['Goes back to ', h('strong', { text: target.label }),
+        target.value === e.approver_id ? ', who approved it.' : e.approver_id ? ' (the person who approved it can no longer review).' : ' (nobody approved it before).',
+        ' It cannot be paid until it is approved again. The submitter is not told.']));
       panel.appendChild(h('label.label', { for: 'review_reason', text: 'What looks wrong? (required)' }));
       panel.appendChild(box);
       panel.appendChild(err);
@@ -1516,6 +1513,15 @@
       field('payee_account', 'Their account number', input('payee_account', { inputmode: 'numeric', autocomplete: 'off' })),
       field('payee_bank', 'Their bank', input('payee_bank', { autocomplete: 'off' })),
     ]);
+    // Which choices are in use is set in config (payee_types); an edit keeps the one it already has.
+    const inUse = (state.limits && state.limits.payeeTypes) || [];
+    const payeeOptions = [
+      { value: 'SUPPLIER', label: 'The supplier', sub: 'Into their bank account', onpick: paintPayee },
+      { value: 'OUTLET_CASH', label: 'Outlet cash box', sub: 'Already paid from the box', onpick: paintPayee },
+      { value: 'SUBMITTER', label: 'Me', sub: 'I paid, pay me back', onpick: paintPayee },
+      { value: 'OTHER', label: 'Someone else', sub: 'e.g. a delivery driver', onpick: paintPayee },
+    ].filter(function (o) { return !inUse.length || inUse.indexOf(o.value) !== -1 || (editing && existing.editable.payee_type === o.value); });
+    if (values.payee_type && !payeeOptions.some(function (o) { return o.value === values.payee_type; })) values.payee_type = '';
     function paintPayee() {
       const t = values.payee_type;
       supplierField.querySelector('.label').textContent = t === 'SUPPLIER' ? 'Supplier' : 'Bought from (optional)';
@@ -1528,17 +1534,12 @@
           ? 'Paid from the outlet cash box. The accountant tops the box up, so nobody is paid twice. Someone must approve it first.'
           : t === 'OTHER'
             ? 'e.g. a delivery driver. Money to someone other than the supplier always needs an approver.'
-            : t === 'SUPPLIER' ? 'Paid to the supplier\u2019s registered bank account.' : '';
+            : t === 'SUPPLIER' ? 'Paid to the supplier\u2019s registered bank account.' + (payeeOptions.some(function (o) { return o.value === 'OTHER'; }) ? '' : ' Paying anyone else, e.g. a delivery driver? Add them as a new supplier.') : '';
       // These can never go straight to the accountant: the list hides that option.
       if (!editing) refreshSendTo();
     }
     const payeeField = field('payee_type', null, h('div', {}, [
-      choices('payee_type', [
-        { value: 'SUPPLIER', label: 'The supplier', sub: 'Into their bank account', onpick: paintPayee },
-        { value: 'OUTLET_CASH', label: 'Outlet cash box', sub: 'Already paid from the box', onpick: paintPayee },
-        { value: 'SUBMITTER', label: 'Me', sub: 'I paid, pay me back', onpick: paintPayee },
-        { value: 'OTHER', label: 'Someone else', sub: 'e.g. a delivery driver', onpick: paintPayee },
-      ], 2, 'Who gets paid?'),
+      choices('payee_type', payeeOptions, 2, 'Who gets paid?'),
       payeeHint,
     ]));
     const payeeBlock = h('div.payee-block', {}, [payeeField, supplierField, otherFields]);
