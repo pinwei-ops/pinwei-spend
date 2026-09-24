@@ -27,9 +27,13 @@ window.Attachment = (function () {
     }
     return new Promise(function (resolve, reject) {
       const img = new Image();
-      img.onload = function () { resolve(img); };
-      img.onerror = function () { reject(new Error('This photo could not be read. Try another one.')); };
-      img.src = URL.createObjectURL(file);
+      const url = URL.createObjectURL(file);
+      img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('This photo cannot be read on this phone. Tap the box again and take the photo with the camera.'));
+      };
+      img.src = url;
     });
   }
 
@@ -46,6 +50,10 @@ window.Attachment = (function () {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise(function (resolve) { canvas.toBlob(resolve, 'image/jpeg', JPEG_QUALITY); });
+    // Give the memory back at once: phones with little RAM (and iOS canvas limits) need it.
+    if (bitmap.close) bitmap.close();
+    canvas.width = 0;
+    canvas.height = 0;
     if (!blob) throw new Error('This photo could not be compressed. Try another one.');
     return blob;
   }
@@ -55,7 +63,8 @@ window.Attachment = (function () {
    */
   async function prepare(file, maxMb) {
     const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
-    if (!isPdf && !/^image\//.test(file.type)) throw new Error('Please choose a photo or a PDF file.');
+    const isImage = /^image\//.test(file.type) || /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name);
+    if (!isPdf && !isImage) throw new Error('Please choose a photo or a PDF file.');
     const sha256 = await sha256Hex(file);
     const out = isPdf ? file : await compressImage(file);
     if (out.size > maxMb * 1024 * 1024) throw new Error('The file is larger than ' + maxMb + ' MB after compression.');

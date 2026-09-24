@@ -16,6 +16,9 @@ window.InApp = (function () {
     if (/Instagram/i.test(ua)) return 'Instagram';
     if (/\bLine\//i.test(ua)) return 'Line';
     if (isAndroid && /; wv\)/.test(ua)) return 'an in-app browser';
+    // iPhone apps' own browsers (Telegram's among them) are WebViews: no "Safari/" in the user agent.
+    // Safari, Chrome/Edge/Firefox for iOS and the in-app Safari view all have it; a home-screen app sets standalone.
+    if (isIOS && !/Safari\//.test(ua) && !navigator.standalone) return 'this app';
     return null;
   }
 
@@ -56,11 +59,12 @@ window.InApp = (function () {
     const iosHint = 'Tap the ••• menu at the top right, then "Open in browser".';
     container.innerHTML =
       '<div class="inapp">' +
-        '<p class="inapp-title">Open this page in your browser</p>' +
+        '<img src="logo-96.png" alt="" width="48" height="48" style="display:block;margin:0 auto 12px">' +
+        '<p class="inapp-title">Open Pin Wei Spend in your browser</p>' +
         '<p>Google sign-in does not work inside ' + appName + '.</p>' +
         (isAndroid ? '<a class="btn btn-primary" id="inapp-open">Open in Chrome</a>' : '') +
         (isIOS ? '<p class="inapp-hint">' + iosHint + '</p>' : '') +
-        '<button type="button" class="btn" id="inapp-copy">Copy link</button>' +
+        '<button type="button" class="btn' + (isAndroid ? '' : ' btn-primary') + '" id="inapp-copy">Copy link</button>' +
         '<p class="inapp-hint" id="inapp-copied" hidden>Link copied. Paste it into Chrome or Safari.</p>' +
         '<button type="button" class="btn btn-link" id="inapp-continue">Try signing in here anyway</button>' +
       '</div>';

@@ -1,0 +1,10 @@
+{
+  "name": "Pin Wei Spend",
+  "short_name": "Pin Wei",
+  "start_url": "./",
+  "scope": "./",
+  "display": "browser",
+  "background_color": "#f3f4f8",
+  "theme_color": "#28318a",
+  "icons": [{ "src": "logo-192.png", "sizes": "192x192", "type": "image/png" }]
+}

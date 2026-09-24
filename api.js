@@ -112,14 +112,33 @@ window.Api = (function () {
     google.accounts.id.disableAutoSelect();
   }
 
+  /** One request, given up after 90 s; a dropped connection is reported plainly (the form is kept). */
   async function post(action, idToken, payload) {
-    const res = await fetch(cfg.API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: action, idToken: idToken, payload: payload || {} }),
-    });
-    if (!res.ok) throw new Error('Server error (HTTP ' + res.status + ')');
-    return res.json();
+    const ctrl = window.AbortController ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 90000) : null;
+    let res;
+    try {
+      res = await fetch(cfg.API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: action, idToken: idToken, payload: payload || {} }),
+        signal: ctrl ? ctrl.signal : undefined,
+      });
+    } catch (err) {
+      const e = new Error('No connection. Your form is kept: try again when you have signal.');
+      e.code = 'NETWORK';
+      throw e;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (!res.ok) throw new Error('The server is not responding (HTTP ' + res.status + '). Try again in a minute.');
+    try {
+      return await res.json();
+    } catch (err) {
+      const e = new Error('The server is not responding properly. Try again in a minute; if it keeps happening, tell the admin.');
+      e.code = 'BAD_RESPONSE';
+      throw e;
+    }
   }
 
   /**

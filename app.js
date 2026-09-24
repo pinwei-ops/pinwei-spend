@@ -90,14 +90,27 @@
     const c = state.ref.categories.find(function (x) { return x.value === code; });
     return c ? c.label : code;
   }
-  // One or two words for tiles and lists; the full wording from the Sheet stays in the detail view.
+  // One or two words for tiles and lists; the full wording from the Sheet is the "Covers:" line.
   const CATEGORY_SHORT = {
-    FOOD: 'Food', SUPPLIES: 'Supplies', RENT: 'Rent', UTILITIES: 'Utilities', MAINTENANCE: 'Repairs',
-    MARKETING: 'Marketing', GIFTS: 'Gifts', STAFF: 'Staff costs', EQUIPMENT: 'Equipment', OTHER: 'Other',
+    FOOD: 'Food & drinks', PACKAGING: 'Packaging', SUPPLIES: 'Supplies', GAS: 'Gas', TRANSPORT: 'Transport',
+    MAINTENANCE: 'Repairs', EQUIPMENT: 'Equipment', UTILITIES: 'Utilities', RENT: 'Rent', STAFF: 'Staff costs',
+    MARKETING: 'Marketing', GIFTS: 'Gifts', OFFICE: 'Office & fees', SECURITY_DEPOSIT: 'Deposit', OTHER: 'Other',
   };
+  // Tile order; codes added later in the Sheet go just before Other.
+  const CATEGORY_ORDER = ['FOOD', 'PACKAGING', 'SUPPLIES', 'GAS', 'TRANSPORT', 'MAINTENANCE', 'EQUIPMENT',
+    'UTILITIES', 'RENT', 'STAFF', 'MARKETING', 'GIFTS', 'OFFICE', 'SECURITY_DEPOSIT', 'OTHER'];
+  // Kitchen staff (requesters outside head office) never pay these, so they don't see them.
+  const HQ_ONLY_CATEGORIES = ['RENT', 'OFFICE', 'SECURITY_DEPOSIT'];
   function categoryShort(code) {
     if (CATEGORY_SHORT[code]) return CATEGORY_SHORT[code];
     return String(categoryLabel(code)).split(',')[0];   // categories added later in the Sheet
+  }
+  function tileCategories(current) {
+    const kitchen = state.user.role === 'REQUESTER' && state.user.outletCode !== 'HQ';
+    const rank = function (code) { const i = CATEGORY_ORDER.indexOf(code); return i === -1 ? CATEGORY_ORDER.length - 1.5 : i; };
+    return state.ref.categories
+      .filter(function (c) { return !kitchen || HQ_ONLY_CATEGORIES.indexOf(c.value) === -1 || c.value === current; })
+      .sort(function (a, b) { return rank(a.value) - rank(b.value); });
   }
 
   const STATUS_TONE = {
@@ -122,11 +135,11 @@
 
   // Theme: light by default (brand look); dark is opt-in and remembered.
   function currentTheme() { return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'; }
-  function toggleTheme() {
+  function toggleTheme(ev) {
     const next = currentTheme() === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
     try { localStorage.setItem('pw_theme', next); } catch (err) { /* private mode */ }
-    route();
+    if (ev && ev.currentTarget) ev.currentTarget.textContent = next === 'dark' ? 'Light' : 'Dark';
   }
 
   // ----------------------------------------------------------------- router
@@ -152,7 +165,7 @@
         h('span.who-role', { text: label('role', state.user.role) }),
       ]),
       h('button.link', { type: 'button', title: 'Switch light or dark theme', text: currentTheme() === 'dark' ? 'Light' : 'Dark', onclick: toggleTheme }),
-      h('button.link', { type: 'button', text: 'Sign out', onclick: function () { Api.signOut(); location.reload(); } }),
+      h('button.link', { type: 'button', text: 'Sign out', onclick: function () { if (!window.confirm('Sign out of Pin Wei Spend?')) return; Api.signOut(); location.reload(); } }),
     ])]);
   }
 
@@ -164,7 +177,9 @@
 
   const APPROVER_ROLES = ['OUTLET_MANAGER', 'OWNER', 'ADMIN'];
   const PAYER_ROLES = ['ACCOUNTANT', 'ADMIN'];
-  const ALL_VIEW_ROLES = ['OWNER', 'ADMIN'];
+  const ALL_VIEW_ROLES = ['OWNER', 'ADMIN', 'ACCOUNTANT', 'OUTLET_MANAGER'];
+  const EXPORT_MONTH_ROLES = ['OWNER', 'ADMIN', 'ACCOUNTANT'];
+  let doneOpen = false;       // the collapsed "Done" list stays open across refreshes
   const allFilter = { outlet: '', status: 'OPEN', q: '' };
   let homeTab = null;
 
@@ -221,7 +236,7 @@
     if (!items.length && !opts.showEmpty) return null;
     const head = h('h2.section-title', {}, [title, items.length ? h('span.count', { text: String(items.length) }) : null]);
     const list = items.length ? h('div.list', {}, items.map(function (e) { return expenseCard(e, opts.showSubmitter); })) : h('p.empty', { text: opts.empty });
-    if (opts.collapsed) return h('details.section', {}, [h('summary', {}, [head]), list]);
+    if (opts.collapsed) return h('details.section', { open: doneOpen, ontoggle: function (ev) { doneOpen = ev.currentTarget.open; } }, [h('summary', {}, [head]), list]);
     return h('section.section', {}, [head, list]);
   }
 
@@ -288,7 +303,7 @@
     if (PAYER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'pay', label: 'To pay', count: state.views.to_pay.length });
     if (APPROVER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'approve', label: 'To approve', count: state.views.to_approve.length + (state.views.to_check || []).length });
     tabDefs.push({ key: 'mine', label: tabDefs.length ? 'Mine' : 'My expenses', count: byStatus(['NEEDS_INFO']).length });
-    if (ALL_VIEW_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'all', label: 'All', count: 0 });
+    if (ALL_VIEW_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'all', label: role === 'OUTLET_MANAGER' ? 'Outlet' : 'All', count: 0 });
     if (tabDefs.length >= 4) {                      // phone width: keep tab labels on one line
       const short = { pay: 'Pay', approve: 'Approve' };
       tabDefs.forEach(function (t) { if (short[t.key]) t.label = short[t.key]; });
@@ -297,7 +312,7 @@
       homeTab = (tabDefs.find(function (t) { return t.key !== 'mine' && t.count; }) || { key: 'mine' }).key;
     }
     const tabs = tabDefs.length > 1 ? h('div.tabs', { role: 'tablist', style: 'grid-template-columns: repeat(' + tabDefs.length + ', 1fr)' }, tabDefs.map(function (t) {
-      return h('button.tab' + (homeTab === t.key ? '.on' : ''), { type: 'button', role: 'tab', onclick: function () { homeTab = t.key; renderHome(); } },
+      return h('button.tab' + (homeTab === t.key ? '.on' : ''), { type: 'button', role: 'tab', 'aria-selected': homeTab === t.key ? 'true' : 'false', onclick: function () { homeTab = t.key; renderHome(); } },
         [t.label, t.count ? h('span.count', { text: String(t.count) }) : null]);
     })) : null;
 
@@ -328,6 +343,7 @@
         ]),
         section('Approved, waiting for payment', q, { showEmpty: true, empty: 'Nothing to pay.', showSubmitter: true }),
         q.length ? h('button.btn', { type: 'button', text: 'Export list for bank transfers (CSV)', onclick: exportToPay }) : null,
+        monthExportRow(),
       ];
     } else {
       body = [
@@ -389,6 +405,7 @@
     });
     return [
       h('div.filters', {}, [h('div.grid2', {}, [outletSel, statusSel]), search]),
+      EXPORT_MONTH_ROLES.indexOf(state.user.role) !== -1 && state.user.role !== 'ACCOUNTANT' ? monthExportRow() : null,
       stats([
         { value: rows.length, label: 'Shown', brand: true },
         { value: fmtShort(total), label: 'Total' },
@@ -424,18 +441,31 @@
     if (att.error) return h('div.doc-missing', { text: att.error });
     const url = URL.createObjectURL(base64ToBlob(att.base64, att.mime));
     if (att.mime === 'application/pdf') {
-      return h('a.btn.btn-doc', { href: url, target: '_blank', rel: 'noopener' }, ['Open PDF document']);
+      return h('div.doc-links', {}, [
+        h('a.btn.btn-doc', { href: url, target: '_blank', rel: 'noopener' }, ['Open PDF document']),
+        h('a.link', { href: url, download: 'invoice.pdf', text: 'Save the PDF to this device' }),
+      ]);
     }
-    const img = h('img.doc-img', { src: url, alt: 'Invoice', onclick: function () { openViewer(url); } });
-    return h('div.doc', {}, [img, h('p.hint.center-text', { text: 'Tap the photo to zoom' })]);
+    const open = h('button.doc-open', { type: 'button', 'aria-label': 'Open the photo full size', onclick: function () { openViewer(url); } },
+      [h('img.doc-img', { src: url, alt: 'Invoice' })]);
+    return h('div.doc', {}, [open, h('p.hint.center-text', { text: 'Tap the photo to zoom' })]);
   }
 
+  /** Full-size photo. The phone's Back button closes it (not the expense); tap to zoom in and out. */
   function openViewer(url) {
     const viewer = h('div.viewer');
-    const close = function () { viewer.remove(); };
-    viewer.addEventListener('click', function (ev) { if (ev.target === viewer) close(); });
-    viewer.appendChild(h('img', { src: url, alt: 'Invoice, full size' }));
-    viewer.appendChild(h('button.viewer-close', { type: 'button', text: 'Close', onclick: close }));
+    let closed = false;
+    function close() {
+      if (closed) return;
+      closed = true;
+      window.removeEventListener('popstate', close);
+      viewer.remove();
+    }
+    history.pushState({ viewer: true }, '');
+    window.addEventListener('popstate', close);
+    const img = h('img', { src: url, alt: 'Invoice, full size', onclick: function () { img.classList.toggle('zoomed'); } });
+    viewer.appendChild(img);
+    viewer.appendChild(h('button.viewer-close', { type: 'button', text: 'Close', onclick: function () { history.back(); } }));
     document.body.appendChild(viewer);
   }
 
@@ -445,6 +475,7 @@
     EDIT: 'Edited', EDIT_NEEDS_REAPPROVAL: 'Edited — needs approval again', CANCEL: 'Cancelled', POST_CHECK: 'Cash payment post-checked',
     PAY_FULL: 'Paid in full', PAY_PARTIAL: 'Partial payment',
     REVIEW_REQUEST: 'Accountant asked for a review', PAY_VOID: 'Payment record voided',
+    POST_CHECK_PROBLEM: 'Problem reported at the cash check', SYSTEM_CLEAR_DEMO: 'Demo data cleared',
   };
 
   function timelineView(items) {
@@ -455,7 +486,7 @@
       if (last && last.at === t.at && last.action === t.action) { if (t.field) last.fields.push(t); return; }
       lines.push({ at: t.at, by: t.by, action: t.action, fields: t.field ? [t] : [] });
     });
-    const isReason = function (f) { return ['info_request', 'rejection_reason', 'payment', 'cancel_reason', 'post_check_note', 'review_request', 'void', 'void_reason'].indexOf(f.field) !== -1; };
+    const isReason = function (f) { return ['info_request', 'rejection_reason', 'payment', 'cancel_reason', 'post_check_note', 'post_check_problem', 'review_request', 'void', 'void_reason'].indexOf(f.field) !== -1; };
     return h('ol.timeline', {}, lines.map(function (l) {
       const note = l.fields.filter(isReason).map(function (f) {
         if (f.field !== 'payment' && f.field !== 'void') return '"' + f.value + '"';
@@ -514,7 +545,7 @@
         row('Payee', [e.payee_name, e.payee_bank, e.payee_account_masked].filter(Boolean).join(' · ')),
         row('Description', e.description),
         row('Due date', fmtDate(e.due_date)),
-        row('Document', e.document_type ? e.document_type.replace(/_/g, ' ').toLowerCase() : ''),
+        row('Document', e.document_type ? (state.ref.documentTypes.find(function (d) { return d.value === e.document_type; }) || { label: e.document_type }).label : ''),
         row('Invoice', [e.invoice_no, fmtDate(e.invoice_date), e.is_red_invoice === true ? 'VAT red invoice' : ''].filter(Boolean).join(' · ')),
         row('Before VAT', hasVat ? fmtMoney(e.amount_before_vat) + ' + VAT ' + fmtMoney(e.vat_amount) : ''),
         row('Payment method', e.payment_method ? label('payment_method', e.payment_method) : ''),
@@ -546,7 +577,7 @@
 
   function decisionPanel(e) {
     const panel = h('div.decide');
-    const reasonBox = h('textarea.input', { rows: 3 });
+    const reasonBox = h('textarea.input', { rows: 3, id: 'decision_reason' });
     const err = h('p.error', { hidden: true });
     let busy = false;
 
@@ -559,7 +590,7 @@
       busy = true;
       setDisabled(true);
       try {
-        const res = await Api.call('decide', { id: e.expense_id, decision: decision, reason: reason });
+        const res = await Api.call('decide', { id: e.expense_id, decision: decision, reason: reason, seen_updated_at: e.updated_at });
         removeFrom('to_approve', e.expense_id);
         if (res.expense.submitted_by === state.user.userId) upsert('mine', res.expense);
         toast({ APPROVE: 'Approved ', REJECT: 'Rejected ', REQUEST_INFO: 'Sent back for info: ' }[decision] + e.expense_id, 'ok');
@@ -598,7 +629,7 @@
       panel.textContent = '';
       err.hidden = true;
       reasonBox.placeholder = reject ? 'Why is this rejected?' : 'What should the submitter add or fix?';
-      panel.appendChild(h('label.label', { text: reject ? 'Reason for rejecting (required)' : 'What is missing? (required)' }));
+      panel.appendChild(h('label.label', { for: 'decision_reason', text: reject ? 'Reason for rejecting (required)' : 'What is missing? (required)' }));
       panel.appendChild(reasonBox);
       panel.appendChild(err);
       panel.appendChild(h('div.row', {}, [
@@ -614,9 +645,11 @@
   // ------------------------------------------------------- lifecycle panels
 
   /** Small reusable "reason + confirm" panel. */
+  let panelSeq = 0;
   function confirmPanel(opts) {
-    const panel = h('div.decide');
-    const box = h('textarea.input', { rows: 2, placeholder: opts.placeholder });
+    const panel = h('div.decide' + (opts.danger ? '.problem-panel' : ''));
+    const boxId = 'panel_box_' + (++panelSeq);
+    const box = h('textarea.input', { rows: 2, placeholder: opts.placeholder, id: boxId });
     const err = h('p.error', { hidden: true });
     function collapsed() {
       panel.textContent = '';
@@ -625,7 +658,7 @@
     function expanded() {
       panel.textContent = '';
       if (opts.intro) panel.appendChild(h('p.confirm-text', { text: opts.intro }));
-      panel.appendChild(h('label.label', { text: opts.label }));
+      panel.appendChild(h('label.label', { for: boxId, text: opts.label }));
       panel.appendChild(box);
       panel.appendChild(err);
       const go2 = h('button.btn' + (opts.danger ? '.btn-danger' : '.btn-approve'), { type: 'button', text: opts.confirm });
@@ -665,7 +698,8 @@
   }
 
   function postCheckPanel(e) {
-    return confirmPanel({
+    const wrap = h('div.stack');
+    wrap.appendChild(confirmPanel({
       open: 'Confirm cash payment', startOpen: true,
       intro: 'Paid in cash: ' + fmtMoney(e.amount_paid) + '. Confirm the money went out and the goods or service arrived.',
       label: 'Note (optional)', placeholder: 'e.g. receipt matches, goods received',
@@ -674,7 +708,20 @@
         const res = await Api.call('postCheck', { id: e.expense_id, note: note });
         afterAction(res, 'Closed ' + e.expense_id);
       },
-    });
+    }));
+    wrap.appendChild(confirmPanel({
+      open: 'Something is wrong? Report it', danger: true, required: true,
+      intro: 'For example the goods did not arrive, the amount is different, or the receipt is wrong. The accountant and the owners are told; the item stays open.',
+      label: 'What is wrong? (required)', placeholder: 'e.g. only 8 of 10 bags of ice arrived',
+      confirm: 'Report the problem',
+      run: async function (note) {
+        const res = await Api.call('postCheck', { id: e.expense_id, note: note, problem: true });
+        state.detail = null;
+        toast('Problem reported for ' + res.expense.expense_id, 'ok');
+        renderExpense(e.expense_id);
+      },
+    }));
+    return wrap;
   }
 
   /** Accountant: "this looks wrong" → back to an owner/admin before anything is paid. */
@@ -742,30 +789,54 @@
     ]);
   }
 
+  /** CSV text: UTF-8 BOM so Excel shows Vietnamese names; formula-looking cells neutralised; accounts kept as text. */
+  function toCsv(columns, rows) {
+    const cell = function (v) {
+      let t = String(v === null || v === undefined ? '' : v);
+      if (typeof v !== 'number' && /^[=+\-@\t\r]/.test(t)) t = "'" + t;   // stop Excel from running it as a formula
+      return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+    };
+    const accIdx = columns.indexOf('account');
+    return '\ufeff' + [columns.join(',')].concat(rows.map(function (r) {
+      return r.map(function (v, i) {
+        const acc = i === accIdx ? String(v || '').replace(/[^0-9A-Za-z-]/g, '') : '';
+        return i === accIdx && acc ? '="' + acc + '"' : cell(v);
+      }).join(',');
+    })).join('\r\n');
+  }
+  function downloadCsv(text, name) {
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+    const a = h('a', { href: url, download: name });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+  }
+
+  /** Month-end: every payment of a month with its accounting fields (voids as negative rows). */
+  function monthExportRow() {
+    if (EXPORT_MONTH_ROLES.indexOf(state.user.role) === -1) return null;
+    const month = h('input.input', { type: 'month', 'aria-label': 'Month to export', value: todayVN().slice(0, 7), max: todayVN().slice(0, 7) });
+    const btn = h('button.btn', { type: 'button', text: 'Export month (CSV)' });
+    btn.addEventListener('click', async function () {
+      if (!/^\d{4}-\d{2}$/.test(month.value)) { toast('Choose a month.'); return; }
+      btn.disabled = true;
+      try {
+        const res = await Api.call('exportMonth', { month: month.value });
+        downloadCsv(toCsv(res.columns, res.rows), 'pinwei-payments-' + res.month + '.csv');
+        toast(res.rows.length + ' payments exported');
+      } catch (err) { toast(err.message); } finally { btn.disabled = false; }
+    });
+    return h('div.month-export', {}, [month, btn]);
+  }
+
   /** CSV for preparing bank transfers; UTF-8 BOM so Excel shows Vietnamese names correctly. */
   async function exportToPay(ev) {
     const btn = ev.target;
     btn.disabled = true;
     try {
       const res = await Api.call('exportToPay');
-      const cell = function (v) {
-        let t = String(v === null || v === undefined ? '' : v);
-        if (typeof v !== 'number' && /^[=+\-@\t\r]/.test(t)) t = "'" + t;   // stop Excel from running it as a formula
-        return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
-      };
-      // Account numbers as ="..." so Excel keeps leading zeros.
-      const accIdx = res.columns.indexOf('account');
-      const lines = [res.columns.join(',')].concat(res.rows.map(function (r) {
-        return r.map(function (v, i) {
-          const acc = i === accIdx ? String(v || '').replace(/[^0-9A-Za-z-]/g, '') : '';
-          return i === accIdx && acc ? '="' + acc + '"' : cell(v);
-        }).join(',');
-      }));
-      const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
-      const a = h('a', { href: URL.createObjectURL(blob), download: 'pinwei-to-pay-' + todayVN() + '.csv' });
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      downloadCsv(toCsv(res.columns, res.rows), 'pinwei-to-pay-' + todayVN() + '.csv');
       toast(res.rows.length + ' rows exported');
     } catch (err) {
       toast(err.message);
@@ -782,8 +853,16 @@
 
   function payToCard(p) {
     const copyBtn = p.account ? h('button.link', { type: 'button', text: 'Copy', onclick: function () {
+      if (!navigator.clipboard) { toast(p.account); return; }
       navigator.clipboard.writeText(p.account).then(function () { toast('Account number copied'); }, function () { toast(p.account); });
     } }) : null;
+    if (p.source === 'outlet_cash') {
+      return h('div.card.payto', {}, [
+        h('h2.section-title', { text: 'Pay to' }),
+        h('div.payto-name', { text: p.name }),
+        h('p.hint', { text: 'Already paid from the outlet cash box. Recording this payment means you topped the box up — nobody else is paid.' }),
+      ]);
+    }
     return h('div.card.payto', {}, [
       h('h2.section-title', { text: 'Pay to' }),
       h('div.payto-name', { text: p.name || '(no name given)' }),
@@ -845,7 +924,7 @@
     dateInput.value = todayVN();
     const methodSelect = h('select.input', {}, state.ref.enums.filter(function (x) { return x.field === 'payment_method'; })
       .map(function (x) { return h('option', { value: x.value, text: x.label }); }));
-    methodSelect.value = e.payment_method || 'BANK_TRANSFER';
+    methodSelect.value = e.payee_type === 'OUTLET_CASH' ? 'CASH' : (e.payment_method || 'BANK_TRANSFER');
     const sourceInput = h('input.input', { autocomplete: 'off', placeholder: 'e.g. VCB-8866 (optional)' });
     const fileInput = h('input', { type: 'file', accept: 'image/*,application/pdf', hidden: true });
     const proofBox = h('div.preview');
@@ -920,9 +999,9 @@
       const warnings = [];
       if (partial) warnings.push('Partial payment: ' + fmtMoney(balance - amount) + ' will still be owed.');
       if (dateInput.value !== todayVN()) warnings.push('The payment date is not today: ' + fmtDate(dateInput.value) + '.');
-      if (!cash && !to.account) warnings.push('No bank account is on file for this payee. Check where the money went.');
+      if (!cash && !to.account && to.source !== 'outlet_cash') warnings.push('No bank account is on file for this payee. Check where the money went.');
       if (to.source === 'payee') warnings.push('The money goes to an account the submitter gave, not the supplier\'s registered account.');
-      if (cash) warnings.push('Cash: the outlet manager will be asked to confirm it afterwards.');
+      if (cash && e.payee_type !== 'OUTLET_CASH') warnings.push('Cash: the outlet manager will be asked to confirm it afterwards.');
 
       const tick = h('input', { type: 'checkbox', id: 'pay_checked' });
       const confirmBtn = h('button.btn.btn-approve.btn-big', { type: 'button', text: partial ? 'Confirm partial payment' : 'Confirm and mark as paid', disabled: true });
@@ -1049,9 +1128,12 @@
    */
   function renderForm(existing) {
     const editing = Boolean(existing);
+    const draft = editing ? {} : loadDraft();
+    // A draft is kept when someone leaves the form; say so, so an old amount isn't sent by mistake.
+    const restored = ['amount_total', 'expense_category', 'payee_type', 'supplier_id', 'description'].some(function (k) { return draft[k]; });
     const values = editing
       ? Object.assign({}, existing.editable)
-      : Object.assign({ request_type: 'INVOICE', outlet_code: state.user.outletCode, payment_method: 'BANK_TRANSFER' }, loadDraft());
+      : Object.assign({ request_type: 'INVOICE', outlet_code: state.user.outletCode, payment_method: 'BANK_TRANSFER' }, draft);
     if (!state.ref.outlets.some(function (o) { return o.value === values.outlet_code; })) values.outlet_code = state.ref.outlets[0].value;
 
     let attachment = null;      // newly prepared upload
@@ -1117,9 +1199,9 @@
 
     // 1. Focusable error summary at the top of the form, each item linking to its field.
     const errorSummary = h('div.error-summary', { role: 'alert', tabindex: '-1', hidden: true });
-    function showErrorSummary(details) {
+    function showErrorSummary(details, title) {
       errorSummary.textContent = '';
-      errorSummary.appendChild(h('p.error-summary-title', { text: details.length === 1 ? 'Please fix 1 problem' : 'Please fix ' + details.length + ' problems' }));
+      errorSummary.appendChild(h('p.error-summary-title', { text: title || (details.length === 1 ? 'Please fix 1 problem' : 'Please fix ' + details.length + ' problems') }));
       errorSummary.appendChild(h('ul', {}, details.map(function (d) {
         const targetField = fieldEls[d.field] ? d.field : '_form';
         return h('li', {}, [h('a', { href: '#', text: d.message, onclick: function (ev) {
@@ -1277,7 +1359,7 @@
       const full = values.expense_category ? categoryLabel(values.expense_category) : '';
       catHint.textContent = full && full !== categoryShort(values.expense_category) ? 'Covers: ' + full : '';
     }
-    state.ref.categories.forEach(function (c) {
+    tileCategories(values.expense_category).forEach(function (c) {
       catGrid.appendChild(h('button.chip-btn', { type: 'button', role: 'radio', 'data-value': c.value, text: categoryShort(c.value), title: c.label,
         onclick: function () { set('expense_category', c.value); paintCats(); } }));
     });
@@ -1286,8 +1368,12 @@
 
     // --- send to
     const sendToList = h('div.radios');
+    // Money back to the submitter, out of the cash box, or to a third party always needs an approver.
+    const NEEDS_APPROVER = ['OTHER', 'SUBMITTER', 'OUTLET_CASH'];
     function refreshSendTo(purchaseDefault) {
-      const opts = state.ref.sendTo[values.outlet_code] || [];
+      const opts = (state.ref.sendTo[values.outlet_code] || []).filter(function (o) {
+        return !(o.kind === 'ACCOUNTANT' && NEEDS_APPROVER.indexOf(values.payee_type) !== -1);
+      });
       if (purchaseDefault || !opts.some(function (o) { return o.value === values.send_to; })) {
         // Spec §6.1: purchase requests default to an owner; invoices to the accountant.
         const owner = opts.find(function (o) { return o.kind === 'OWNER'; }) || opts.find(function (o) { return o.kind === 'ADMIN'; });
@@ -1319,7 +1405,15 @@
       field('new_supplier_bank_name', 'Bank', input('new_supplier_bank_name', { autocomplete: 'off' })),
       field('new_supplier_bank_account', 'Account number', input('new_supplier_bank_account', { inputmode: 'numeric', autocomplete: 'off' })),
     ]);
-    supplierSelect.addEventListener('change', function () { newSupplierBox.hidden = supplierSelect.value !== NEW_SUPPLIER; });
+    supplierSelect.addEventListener('change', function () {
+      newSupplierBox.hidden = supplierSelect.value !== NEW_SUPPLIER;
+      // A regular supplier suggests its usual category (one tap less for daily deliveries).
+      const s = state.ref.suppliers.find(function (x) { return x.value === supplierSelect.value; });
+      if (s && s.defaultCategory && !values.expense_category && catGrid.querySelector('[data-value="' + s.defaultCategory + '"]')) {
+        set('expense_category', s.defaultCategory);
+        paintCats();
+      }
+    });
     newSupplierBox.hidden = values.supplier_id !== NEW_SUPPLIER;
     const supplierField = field('supplier_id', 'Supplier', h('div', {}, [supplierSelect, newSupplierBox]));
 
@@ -1351,23 +1445,23 @@
       supplierField.hidden = !t;
       otherFields.hidden = t !== 'OTHER';
       payeeHint.textContent = t === 'SUBMITTER'
-        ? 'The accountant pays you back. Ask the admin to put your bank account in the system once.'
-        : t === 'OTHER'
-          ? 'e.g. a delivery driver. Money to someone other than the supplier always needs an approver.'
-          : t === 'SUPPLIER' ? 'Paid to the supplier\u2019s registered bank account.' : '';
-      // V7: a third-party payee can never go straight to the accountant.
-      if (t === 'OTHER' && !editing && values.send_to === 'ACCOUNTANT') {
-        const opts = state.ref.sendTo[values.outlet_code] || [];
-        const approver = opts.find(function (o) { return o.kind !== 'ACCOUNTANT'; });
-        if (approver) { values.send_to = approver.value; saveDraft(values); refreshSendTo(); }
-      }
+        ? (state.user.hasBankAccount ? 'The accountant pays you back into your bank account on file. Someone must approve it first.'
+          : 'Your bank account is not on file yet: ask the admin to add it, or you will be paid back in cash. Someone must approve it first.')
+        : t === 'OUTLET_CASH'
+          ? 'Paid from the outlet cash box. The accountant tops the box up, so nobody is paid twice. Someone must approve it first.'
+          : t === 'OTHER'
+            ? 'e.g. a delivery driver. Money to someone other than the supplier always needs an approver.'
+            : t === 'SUPPLIER' ? 'Paid to the supplier\u2019s registered bank account.' : '';
+      // These can never go straight to the accountant: the list hides that option.
+      if (!editing) refreshSendTo();
     }
     const payeeField = field('payee_type', null, h('div', {}, [
       choices('payee_type', [
         { value: 'SUPPLIER', label: 'The supplier', sub: 'Into their bank account', onpick: paintPayee },
-        { value: 'OTHER', label: 'Someone else', sub: 'e.g. a delivery driver', onpick: paintPayee },
+        { value: 'OUTLET_CASH', label: 'Outlet cash box', sub: 'Already paid from the box', onpick: paintPayee },
         { value: 'SUBMITTER', label: 'Me', sub: 'I paid, pay me back', onpick: paintPayee },
-      ], 3, 'Who gets paid?'),
+        { value: 'OTHER', label: 'Someone else', sub: 'e.g. a delivery driver', onpick: paintPayee },
+      ], 2, 'Who gets paid?'),
       payeeHint,
     ]));
     const payeeBlock = h('div.payee-block', {}, [payeeField, supplierField, otherFields]);
@@ -1411,6 +1505,7 @@
       if (submitting) return;
       submitting = true;
       warnBox.hidden = true;
+      stickyBar.hidden = false;
       errorSummary.hidden = true;
       Object.keys(fieldEls).forEach(clearError);
       submitBtn.disabled = true;
@@ -1445,7 +1540,7 @@
           showErrorSummary(err.details);
         } else {
           showError('_form', err.message || 'Something went wrong. Please try again.');
-          showErrorSummary([{ field: '_form', message: err.message || 'Something went wrong. Please try again.' }]);
+          showErrorSummary([{ field: '_form', message: err.message || 'Something went wrong. Please try again.' }], err.code === 'NETWORK' ? 'Not sent' : null);
         }
       } finally {
         submitting = false;
@@ -1459,16 +1554,22 @@
       warnBox.appendChild(h('p.warn-title', { text: 'Please double-check' }));
       warnBox.appendChild(h('ul', {}, warnings.map(function (w) { return h('li', { text: w.message }); })));
       warnBox.appendChild(h('div.row', {}, [
-        h('button.btn', { type: 'button', text: 'Go back', onclick: function () { warnBox.hidden = true; } }),
+        h('button.btn', { type: 'button', text: 'Go back', onclick: function () { warnBox.hidden = true; stickyBar.hidden = false; } }),
         h('button.btn.btn-primary', { type: 'button', text: 'Submit anyway', onclick: function () { submit(true); } }),
       ]));
       warnBox.hidden = false;
+      stickyBar.hidden = true;   // one Submit button at a time: the warnings decide
       warnBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 
+    const stickyBar = h('div.sticky-submit', {}, [summary, submitBtn]);
     const form = h('form.form', { novalidate: true, onsubmit: function (ev) { ev.preventDefault(); submit(false); } }, [
-      h('a.back', { href: editing ? '#/expense/' + encodeURIComponent(existing.expense_id) : '#/', text: 'Cancel' }),
-      h('h1.title', { text: editing ? (existing.status === 'NEEDS_INFO' ? 'Edit and resubmit ' : 'Edit ') + existing.expense_id : 'New expense' }),
+      h('a.back', { href: editing ? '#/expense/' + encodeURIComponent(existing.expense_id) : '#/', text: editing ? 'Cancel' : 'Back' }),
+      h('h1.title', {}, editing
+        ? [(existing.status === 'NEEDS_INFO' ? 'Edit and resubmit ' : 'Edit '), h('span.id-nowrap', { text: existing.expense_id })]
+        : ['New expense']),
+      restored ? h('p.hint', {}, ['Filled in from your unsent expense. ',
+        h('button.link', { type: 'button', text: 'Start empty', onclick: function () { clearDraft(); renderForm(null); } })]) : null,
       errorSummary,
       editing && existing.status === 'APPROVED' && existing.send_to !== 'ACCOUNTANT'
         ? h('div.item-note', { text: 'Already approved. Changing the amount, the supplier or who gets paid sends it back for approval.' }) : null,
@@ -1479,7 +1580,7 @@
       section(4, editing ? 'Who reviews it' : 'Send to', [sendField]),
       more,
       formErrors, warnBox,
-      h('div.sticky-submit', {}, [summary, submitBtn]),
+      stickyBar,
     ]);
     paintAttachment();
     paintSummary();
@@ -1513,7 +1614,7 @@
       if (hadAll) state.views.all = (await Api.call('listExpenses', { view: 'all' })).expenses;
       state.user.telegramLinked = data.telegramLinked;
       state.refreshedAt = new Date();
-      if (onHome() && !document.querySelector('.overlay, .viewer')) renderHome(true);
+      if (onHome() && !userIsTyping() && !document.querySelector('.overlay, .viewer')) renderHome(true);
     } catch (err) {
       if (manual) toast(err.message);
     } finally {
@@ -1521,8 +1622,30 @@
     }
   }
 
+  // Tabs stay open for days: when a new version is published, offer a reload (never forced: a form may be half-filled).
+  const loadedVersion = (function () {
+    const el = document.querySelector('script[src*="app.js"]');
+    const m = el && el.getAttribute('src').match(/[?&]v=([^&]+)/);
+    return m ? m[1] : '';
+  })();
+  let lastVersionCheck = 0;
+  async function checkForUpdate() {
+    if (!loadedVersion || Date.now() - lastVersionCheck < 10 * 60000 || document.querySelector('.update-bar')) return;
+    lastVersionCheck = Date.now();
+    try {
+      const html = await (await fetch('index.html?check=' + Date.now(), { cache: 'no-store' })).text();
+      const m = html.match(/app\.js\?v=([^"']+)/);
+      if (!m || m[1] === loadedVersion) return;
+      document.body.appendChild(h('div.update-bar', { role: 'status' }, [
+        h('span', { text: 'A new version of the app is ready.' }),
+        h('button.btn', { type: 'button', text: 'Reload', onclick: function () { location.reload(); } }),
+      ]));
+    } catch (err) { /* offline: try again later */ }
+  }
+
   function refreshCurrent() {
     if (document.visibilityState !== 'visible') return;
+    checkForUpdate();
     if (onHome()) { refreshViews(false); return; }
     const m = location.hash.match(/^#\/expense\/(.+)$/);
     if (m && !userIsTyping() && !document.querySelector('.viewer')) renderExpense(decodeURIComponent(m[1]), { silent: true });
