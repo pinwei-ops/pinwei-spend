@@ -1159,7 +1159,7 @@
   // ------------------------------------------------------------------- form
 
   const NEW_SUPPLIER = '__new__';
-  const DRAFT_FIELDS = ['new_supplier_name', 'new_supplier_tax_id', 'new_supplier_bank_name', 'new_supplier_bank_account', 'request_type', 'amount_total', 'expense_category', 'send_to', 'description', 'no_doc_reason', 'payee_type',
+  const DRAFT_FIELDS = ['new_supplier_name', 'new_supplier_tax_id', 'new_supplier_bank_name', 'new_supplier_bank_account', 'request_type', 'amount_total', 'expense_category', 'send_to', 'description', 'no_doc_reason', 'no_doc_note', 'payee_type',
     'outlet_code', 'supplier_id', 'document_type', 'due_date', 'invoice_no', 'invoice_date', 'is_red_invoice',
     'amount_before_vat', 'vat_amount', 'payment_method', 'payee_name', 'payee_account', 'payee_bank'];
 
@@ -1344,6 +1344,8 @@
     const preview = h('div.preview');
     const noDocSelect = select('no_doc_reason', state.ref.enums.filter(function (e) { return e.field === 'no_doc_reason'; }), 'Choose a reason');
     const noDocField = field('no_doc_reason', 'Why is there no document?', noDocSelect);
+    const noDocNoteField = field('no_doc_note', 'Reason (optional)', input('no_doc_note', { maxlength: 300, autocomplete: 'off', placeholder: 'e.g. Street vendor, no receipt' }));
+    noDocSelect.addEventListener('change', function () { paintAttachment(); });
     // The reason picker stays out of the way until someone says they have no document.
     let noDocOpen = Boolean(values.no_doc_reason);
     const noDocToggle = h('button.link.nodoc-toggle', { type: 'button', text: 'No document? Choose a reason instead', onclick: function () { openNoDoc(true); } });
@@ -1389,6 +1391,7 @@
       dropzone.classList.toggle('compact', hasDoc);
       dropTitle.textContent = hasDoc ? 'Replace photo' : 'Take or choose a photo';
       noDocField.hidden = hasDoc || status === 'working' || !noDocOpen;
+      noDocNoteField.hidden = noDocField.hidden || values.no_doc_reason !== 'OTHER';
       noDocToggle.hidden = hasDoc || status === 'working' || noDocOpen;
     }
 
@@ -1441,6 +1444,12 @@
         saveDraft(values);
       }
       sendToList.textContent = '';
+      if (!opts.length) {
+        const all = state.ref.sendTo[values.outlet_code] || [];
+        sendToList.appendChild(h('p.hint.warn-text', { text: all.length
+          ? 'Money to someone else, back to you or from the cash box must be approved first, and nobody is set up to approve it for this outlet yet. Choose "Supplier" if it is paid to a supplier, or ask the admin.'
+          : 'Nobody is set up to receive this yet. Ask the admin to check the users list.' }));
+      }
       opts.forEach(function (o) {
         const id = 'sendto_' + o.value;
         sendToList.appendChild(h('label.radio', { for: id }, [
@@ -1450,10 +1459,18 @@
       });
       paintSummary();
     }
+    /** Fresh approver list from the server (someone may have been added or deactivated since sign-in). */
+    function reloadSendTo() {
+      return Api.call('views').then(function (data) {
+        if (!data.sendTo) return;
+        state.ref.sendTo = data.sendTo;
+        if (sendToList.isConnected) refreshSendTo();
+      }).catch(function () { /* the list on screen stays; submitting reports any real problem */ });
+    }
     const sendField = editing
       ? field('send_to', 'Goes back to', h('div.readonly', { text: existing.send_to_name }), 'The person who asked for more info reviews it again.')
       : field('send_to', null, sendToList);
-    if (!editing) refreshSendTo();
+    if (!editing) { refreshSendTo(); reloadSendTo(); }
 
     // --- who gets paid (supplier / someone else / me)
     const payeeHint = h('p.hint');
@@ -1576,6 +1593,7 @@
         DRAFT_FIELDS.forEach(function (f) { if (values[f] !== undefined) payload[f] = values[f]; });
         if (attachment) { payload.file = { name: attachment.name, mime: attachment.mime, base64: attachment.base64, sha256: attachment.sha256 }; payload.no_doc_reason = ''; }
         if (!attachment && keptAttachment) payload.no_doc_reason = '';
+        if (!payload.no_doc_reason) payload.no_doc_note = '';
         payload.confirmWarnings = Boolean(confirmWarnings);
         if (editing) { payload.id = existing.expense_id; payload.removeAttachment = removedAttachment && !attachment; }
         if (values.supplier_id === NEW_SUPPLIER) {
@@ -1595,6 +1613,7 @@
         go('/');
       } catch (err) {
         if (err.code === 'VALIDATION' && err.details.length) {
+          if (!editing && err.details.some(function (d) { return d.field === 'send_to'; })) reloadSendTo();
           err.details.forEach(function (d) { showError(d.field in fieldEls ? d.field : '_form', d.message); });
           if (err.details.some(function (d) { return more.contains(fieldEls[d.field] || null); })) more.open = true;
           showErrorSummary(err.details);
@@ -1634,7 +1653,7 @@
       editing && existing.status === 'APPROVED' && existing.send_to !== 'ACCOUNTANT'
         ? h('div.item-note', { text: 'Already approved. Changing the amount, the supplier or who gets paid sends it back for approval.' }) : null,
       editing && existing.info_request ? h('div.item-note', { text: 'Requested: ' + existing.info_request }) : null,
-      section(1, 'What is it?', [typeField, fileField, noDocToggle, noDocField]),
+      section(1, 'What is it?', [typeField, fileField, noDocToggle, noDocField, noDocNoteField]),
       section(2, 'How much?', [amountField, catField, descField]),
       section(3, 'Who gets paid?', [payeeBlock]),
       section(4, editing ? 'Who reviews it' : 'Send to', [sendField]),
@@ -1671,6 +1690,7 @@
       const data = await Api.call('views');
       const hadAll = Boolean(state.views.all);
       state.views = data.views;
+      if (data.sendTo) state.ref.sendTo = data.sendTo;
       if (hadAll) state.views.all = (await Api.call('listExpenses', { view: 'all' })).expenses;
       state.user.telegramLinked = data.telegramLinked;
       state.refreshedAt = new Date();
