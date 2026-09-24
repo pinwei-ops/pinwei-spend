@@ -8,6 +8,7 @@
     limits: null,
     views: { mine: [], to_approve: [], to_pay: [], to_check: [] },
     detail: null,   // last expense opened, reused by the edit form
+    cash: null,     // petty cash book, loaded when its tab is opened
   };
 
   // ------------------------------------------------------------ DOM helpers
@@ -151,6 +152,10 @@
     if (edit) return renderEdit(decodeURIComponent(edit[1]));
     const m = hash.match(/^\/expense\/(.+)$/);
     if (m) return renderExpense(decodeURIComponent(m[1]));
+    const cashForm = hash.match(/^\/cash-(spend|deposit|count)$/);
+    if (cashForm) return renderCashForm(cashForm[1]);
+    const cashEntry = hash.match(/^\/cash\/(.+)$/);
+    if (cashEntry) return renderCashEntry(decodeURIComponent(cashEntry[1]));
     return renderHome();
   }
   function go(path) { if (location.hash === '#' + path) route(); else location.hash = path; }
@@ -328,12 +333,18 @@
     if (APPROVER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'approve', label: 'To approve', count: state.views.to_approve.length + (state.views.to_check || []).length });
     tabDefs.push({ key: 'mine', label: tabDefs.length ? 'Mine' : 'My expenses', count: byStatus(['NEEDS_INFO']).length });
     if (ALL_VIEW_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'all', label: role === 'OUTLET_MANAGER' ? 'Outlet' : 'All', count: 0 });
+    // Petty cash: first for the cash keeper and funder (it is their job), last for everyone else who follows it.
+    if (state.user.petty) {
+      const cashTab = { key: 'cash', label: 'Cash', count: state.cash ? state.cash.pending.filter(function (x) { return x.can_confirm; }).length : 0 };
+      if (state.user.petty === 'KEEPER' || state.user.petty === 'FUNDER') tabDefs.unshift(cashTab); else tabDefs.push(cashTab);
+    }
     if (tabDefs.length >= 4) {                      // phone width: keep tab labels on one line
       const short = { pay: 'Pay', approve: 'Approve' };
       tabDefs.forEach(function (t) { if (short[t.key]) t.label = short[t.key]; });
     }
     if (!homeTab || !tabDefs.some(function (t) { return t.key === homeTab; })) {
-      homeTab = (tabDefs.find(function (t) { return t.key !== 'mine' && t.count; }) || { key: 'mine' }).key;
+      const own = state.user.petty === 'KEEPER' || state.user.petty === 'FUNDER' ? { key: 'cash' } : null;
+      homeTab = (own || tabDefs.find(function (t) { return t.key !== 'mine' && t.count; }) || { key: 'mine' }).key;
     }
     const tabs = tabDefs.length > 1 ? h('div.tabs', { role: 'tablist', style: 'grid-template-columns: repeat(' + tabDefs.length + ', 1fr)' }, tabDefs.map(function (t) {
       return h('button.tab' + (homeTab === t.key ? '.on' : ''), { type: 'button', role: 'tab', 'aria-selected': homeTab === t.key ? 'true' : 'false', onclick: function () { homeTab = t.key; renderHome(); } },
@@ -341,7 +352,9 @@
     })) : null;
 
     let body;
-    if (homeTab === 'all') {
+    if (homeTab === 'cash') {
+      body = cashView();
+    } else if (homeTab === 'all') {
       body = allView();
     } else if (homeTab === 'approve') {
       const qa = state.views.to_approve;
@@ -481,6 +494,331 @@
     const seen = {};
     (state.views.all || []).forEach(function (e) { seen[e.outlet_code] = true; });
     return Object.keys(seen).sort();
+  }
+
+  // -------------------------------------------------------------- petty cash
+  // One cash box kept by the cash keeper. Deposits count once she confirms them;
+  // spends are recorded (not approved); a count lines the balance up with the cash.
+
+  const CASH_TYPE = { DEPOSIT: 'Deposit', SPEND: 'Spend', COUNT: 'Cash count', VOID: 'Cancelled entry' };
+  let cashLoading = false;
+
+  function loadCash(force) {
+    if (state.cash && !force) return state.cash;
+    if (!cashLoading) {
+      cashLoading = true;
+      Api.call('pettyCash').then(function (res) {
+        state.cash = res;
+        if (onHome() && homeTab === 'cash') renderHome(true);
+      }).catch(function (err) { toast(err.message); }).finally(function () { cashLoading = false; });
+    }
+    return state.cash || null;
+  }
+
+  function signedMoney(n) { return (n > 0 ? '+' : n < 0 ? '−' : '') + fmtMoney(Math.abs(n)); }
+
+  function cashEntryLine(x) {
+    const what = x.entry_type === 'SPEND'
+      ? [x.outlet_code, categoryShort(x.expense_category), x.description].filter(Boolean).join(' · ')
+      : x.entry_type === 'DEPOSIT'
+        ? 'From ' + x.recorded_by_name + (x.status === 'PENDING' ? ' · waiting for the keeper to confirm' : x.status === 'CANCELLED' ? ' · cancelled' : ' · received by ' + x.confirmed_by_name + (x.received_amount !== '' && x.received_amount !== x.amount ? ' (' + fmtMoney(x.received_amount) + ' of ' + fmtMoney(x.amount) + ')' : ''))
+        : x.description;
+    const shown = x.entry_type === 'DEPOSIT' && x.status !== 'RECEIVED' ? fmtMoney(x.amount) : signedMoney(x.effect);
+    return h('a.item.cash-item' + (x.voided || x.status === 'CANCELLED' ? '.voided' : ''), { href: '#/cash/' + encodeURIComponent(x.entry_id) }, [h('div.item-body', {}, [
+      h('div.item-top', {}, [
+        h('span.amount' + (x.effect > 0 ? '.cash-in' : ''), { text: shown }),
+        h('span.chip' + (x.entry_type === 'DEPOSIT' ? '.ok' : x.entry_type === 'SPEND' ? '.info' : '.warn'), { text: CASH_TYPE[x.entry_type] || x.entry_type }),
+      ]),
+      h('div.item-mid', { text: what }),
+      h('div.item-meta', {}, [
+        h('span', { text: x.entry_id }),
+        h('span', { text: fmtDate(x.entry_date) }),
+        x.entry_type === 'SPEND' ? h('span', { text: x.has_doc ? 'Receipt attached' : 'No receipt' }) : null,
+        x.voided ? h('span.due.overdue', { text: 'Cancelled' }) : null,
+      ]),
+    ])]);
+  }
+
+  function cashView() {
+    const c = loadCash(false);
+    if (!c) return [loading('Loading the cash box…')];
+    const low = c.lowBalance > 0 && c.balance < c.lowBalance;
+    const groups = [];
+    c.entries.filter(function (x) { return !(x.entry_type === 'DEPOSIT' && x.status === 'PENDING'); }).forEach(function (x) {
+      const day = fmtDate(x.entry_date);
+      const last = groups[groups.length - 1];
+      if (last && last.day === day) last.items.push(x); else groups.push({ day: day, items: [x] });
+    });
+    const monthIn = h('input.input', { type: 'month', 'aria-label': 'Month to export', value: todayVN().slice(0, 7), max: todayVN().slice(0, 7) });
+    const exportBtn = h('button.btn', { type: 'button', text: 'Export month (CSV)', onclick: async function () {
+      if (!/^\d{4}-\d{2}$/.test(monthIn.value)) { toast('Choose a month.'); return; }
+      exportBtn.disabled = true;
+      try {
+        const res = await Api.call('pettyExport', { month: monthIn.value });
+        downloadCsv(toCsv(res.columns, res.rows), 'pinwei-petty-cash-' + res.month + '.csv');
+        toast(res.rows.length + ' entries exported');
+      } catch (err) { toast(err.message); } finally { exportBtn.disabled = false; }
+    } });
+    return [
+      h('div.card.cash-balance' + (low ? '.low' : ''), {}, [
+        h('div.stat-label', { text: 'Cash in the box' }),
+        h('div.cash-balance-value', { text: fmtMoney(c.balance) }),
+      ]),
+      stats([
+        { value: fmtMoney(c.spentSinceDeposit), label: 'Spent since deposit' },
+        { value: c.lastCount ? (c.lastCount.difference ? signedMoney(c.lastCount.difference) : 'Matched') : '—', label: c.lastCount ? 'Last count · ' + fmtDate(c.lastCount.date) : 'Last count' },
+      ]),
+      low ? h('div.flag', { text: 'The cash box is low. To refill it, the next deposit should be about ' + fmtMoney(c.spentSinceDeposit) + ' (what was spent since the last deposit).' }) : null,
+      c.can.spend ? h('a.btn.btn-primary.btn-big', { href: '#/cash-spend' }, ['+ Record a cash spend']) : null,
+      c.can.deposit || c.can.count ? h('div.row.cash-actions', {}, [
+        c.can.deposit ? h('a.btn', { href: '#/cash-deposit', text: 'Record a deposit' }) : null,
+        c.can.count ? h('a.btn', { href: '#/cash-count', text: 'Count the cash' }) : null,
+      ]) : null,
+      c.pending.length ? h('section.section', {}, [
+        h('h2.section-title', {}, ['Deposits waiting to be confirmed', h('span.count', { text: String(c.pending.length) })]),
+        h('div.list', {}, c.pending.map(function (x) { return depositCard(x); })),
+      ]) : null,
+      groups.length ? null : h('p.empty', { text: 'Nothing recorded in the last 45 days.' }),
+    ].concat(groups.map(function (g) {
+      return h('section.section', {}, [h('h2.section-title', { text: g.day }), h('div.list', {}, g.items.map(cashEntryLine))]);
+    })).concat([h('div.month-export', {}, [monthIn, exportBtn])]);
+  }
+
+  /** A deposit on its way: the keeper counts it and confirms what actually arrived. */
+  function depositCard(x) {
+    const card = h('div.card.deposit-card');
+    card.appendChild(h('div.item-top', {}, [h('span.amount', { text: fmtMoney(x.amount) }), h('span.chip.ok', { text: 'Deposit' })]));
+    card.appendChild(h('div.item-mid', { text: 'From ' + x.recorded_by_name + ' · ' + fmtDate(x.entry_date) + (x.description ? ' · ' + x.description : '') }));
+    card.appendChild(h('a.link', { href: '#/cash/' + encodeURIComponent(x.entry_id), text: x.entry_id }));
+    if (!x.can_confirm) { card.appendChild(h('p.hint', { text: 'Waiting for the cash keeper to count it and confirm.' })); return card; }
+    const amount = moneyBox(String(x.amount));
+    const err = h('p.error', { hidden: true });
+    const btn = h('button.btn.btn-approve', { type: 'button', text: 'Received' });
+    btn.addEventListener('click', async function () {
+      const got = amount.value();
+      if (!got) { err.textContent = 'Enter the amount you received.'; err.hidden = false; return; }
+      if (got !== Number(x.amount) && !window.confirm('You received ' + fmtMoney(got) + ', not ' + fmtMoney(x.amount) + '. The owners will be told about the difference. Continue?')) return;
+      btn.disabled = true;
+      try {
+        await Api.call('pettyConfirm', { id: x.entry_id, received_amount: got });
+        toast('Received ' + fmtMoney(got), 'ok');
+        loadCash(true);
+      } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
+    });
+    card.appendChild(h('label.label', { text: 'Amount you received' }));
+    card.appendChild(amount.el);
+    card.appendChild(err);
+    card.appendChild(btn);
+    return card;
+  }
+
+  /** Money field with thousands separators and the amount in words. value() → number or 0. */
+  function moneyBox(initial, id) {
+    const input = h('input.input.money', { inputmode: 'numeric', autocomplete: 'off', placeholder: 'Enter amount', id: id || null });
+    const words = h('p.hint.words');
+    let digits = String(initial || '').replace(/\D/g, '');
+    function paint() {
+      input.value = digits ? money.format(Number(digits)) : '';
+      words.textContent = Number(digits) ? amountInWords(digits) : '';
+    }
+    input.addEventListener('input', function () { digits = input.value.replace(/\D/g, '').replace(/^0+(?=\d)/, ''); paint(); if (input.onamount) input.onamount(); });
+    paint();
+    return { el: h('div', {}, [h('div.money-wrap', {}, [input, h('span.suffix', { text: '₫' })]), words]), input: input, value: function () { return Number(digits) || 0; } };
+  }
+
+  /** #/cash-spend, #/cash-deposit, #/cash-count */
+  function renderCashForm(kind) {
+    const back = h('a.back', { href: '#/', text: 'Back' });
+    if (!state.user.petty) { mount(page([back, h('p.empty', { text: 'You do not use the cash box.' })])); return; }
+    if (kind === 'count' && !state.cash) {           // the count compares with the balance on record
+      mount(page([back, loading()]));
+      Api.call('pettyCash').then(function (res) { state.cash = res; if (location.hash === '#/cash-count') renderCashForm('count'); })
+        .catch(function (err) { mount(page([back, h('p.empty', { text: err.message })])); });
+      return;
+    }
+    const titles = { spend: 'Record a cash spend', deposit: 'Record a cash deposit', count: 'Count the cash' };
+    const errs = {};
+    const fieldBox = function (name, labelText, control, hint) {
+      errs[name] = h('p.error', { hidden: true });
+      return h('div.field', { 'data-field': name }, [labelText ? h('label.label', { text: labelText }) : null, control, hint ? h('p.hint', { text: hint }) : null, errs[name]]);
+    };
+    const summary = h('div.error-summary', { role: 'alert', hidden: true });
+    function showProblems(details) {
+      Object.keys(errs).forEach(function (k) { errs[k].hidden = true; });
+      details.forEach(function (d) { const p = errs[d.field] || errs._form; p.textContent = d.message; p.hidden = false; });
+      summary.textContent = '';
+      summary.appendChild(h('p.error-summary-title', { text: details.length === 1 ? 'Please fix 1 problem' : 'Please fix ' + details.length + ' problems' }));
+      summary.appendChild(h('ul', {}, details.map(function (d) { return h('li', { text: d.message }); })));
+      summary.hidden = false;
+      summary.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    errs._form = h('p.error', { hidden: true });
+    const amount = moneyBox('', 'cash_amount');
+    const date = h('input.input', { type: 'date', value: todayVN(), max: todayVN() });
+    const note = h('textarea.input', { rows: 2 });
+    let attachment = null;
+    let preparing = null;
+    const fileInput = h('input', { type: 'file', accept: 'image/*,application/pdf', hidden: true });
+    const preview = h('div.preview');
+    const dropzone = h('button.dropzone', { type: 'button', onclick: function () { fileInput.click(); } }, [
+      h('span.dropzone-title', { text: 'Take or choose a photo' }),
+      h('span.dropzone-sub', { text: kind === 'deposit' ? 'Cheque or withdrawal slip (optional)' : 'Receipt or bill. PDF works too.' }),
+    ]);
+    fileInput.addEventListener('change', function () {
+      const f = fileInput.files[0];
+      if (!f) return;
+      preview.textContent = 'Preparing photo…';
+      preparing = Attachment.prepare(f, (state.limits && state.limits.maxUploadMb) || 10).then(function (a) {
+        attachment = a;
+        preview.textContent = '';
+        preview.appendChild(h('div.preview-row', {}, [
+          a.mime.indexOf('image/') === 0 ? h('img.thumb', { src: 'data:' + a.mime + ';base64,' + a.base64, alt: 'Receipt' }) : h('span.pdf', { text: 'PDF' }),
+          h('div.preview-info', {}, [h('span', { text: f.name })]),
+          h('button.link', { type: 'button', text: 'Remove', onclick: function () { attachment = null; preview.textContent = ''; noDoc.hidden = false; } }),
+        ]));
+        noDoc.hidden = true;
+      }).catch(function (err) { attachment = null; preview.textContent = err.message; }).finally(function () { preparing = null; });
+    });
+    const reasonSel = h('select.input', {}, [h('option', { value: '', text: 'Choose a reason' })]
+      .concat(state.ref.enums.filter(function (x) { return x.field === 'no_doc_reason' && x.value !== 'PURCHASE_NOT_ORDERED'; }).map(function (x) { return h('option', { value: x.value, text: x.label }); })));
+    const reasonNote = h('input.input', { maxlength: 300, placeholder: 'Reason (optional), e.g. street vendor' });
+    reasonNote.hidden = true;
+    reasonSel.addEventListener('change', function () { reasonNote.hidden = reasonSel.value !== 'OTHER'; });
+    const noDoc = fieldBox('no_doc_reason', 'No receipt? Choose why', h('div.stack', {}, [reasonSel, reasonNote]));
+
+    let body = [];
+    let payloadOf;
+    let action;
+    if (kind === 'spend') {
+      let category = '';
+      const catGrid = h('div.cat-grid', { role: 'radiogroup', 'aria-label': 'Category' });
+      const paintCats = function () { catGrid.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.value === category); b.setAttribute('aria-checked', b.dataset.value === category); }); };
+      state.ref.categories.slice().sort(function (a, b) {
+        const r = function (x) { const i = CATEGORY_ORDER.indexOf(x.value); return i === -1 ? 99 : i; };
+        return r(a) - r(b);
+      }).forEach(function (c) {
+        catGrid.appendChild(h('button.chip-btn', { type: 'button', role: 'radio', 'data-value': c.value, text: categoryShort(c.value), title: c.label, onclick: function () { category = c.value; paintCats(); } }));
+      });
+      paintCats();
+      const outlet = h('select.input', {}, [h('option', { value: '', text: 'Choose the outlet' })]
+        .concat(state.ref.outlets.map(function (o) { return h('option', { value: o.value, text: o.label }); })));
+      note.placeholder = 'What was bought, and why in cash?';
+      body = [
+        fieldBox('amount', 'Amount', amount.el),
+        fieldBox('file', 'Photo of the receipt', h('div', {}, [fileInput, preview, dropzone])),
+        noDoc,
+        fieldBox('outlet_code', 'For which outlet?', outlet),
+        fieldBox('expense_category', 'Category', catGrid),
+        fieldBox('description', 'What for?', note),
+        fieldBox('entry_date', 'Date', date),
+      ];
+      action = 'pettySpend';
+      payloadOf = function () {
+        return { amount: amount.value(), entry_date: date.value, outlet_code: outlet.value, expense_category: category, description: note.value.trim(),
+          no_doc_reason: attachment ? '' : reasonSel.value, no_doc_note: attachment ? '' : reasonNote.value.trim() };
+      };
+    } else if (kind === 'deposit') {
+      note.placeholder = 'e.g. Cheque no. 123, signed by Eddy';
+      body = [
+        h('p.hint', { text: 'Record the cash you are handing to the cash keeper. It is added to the balance when she confirms how much she received.' }),
+        fieldBox('amount', 'Amount', amount.el),
+        fieldBox('entry_date', 'Date', date),
+        fieldBox('file', 'Photo of the cheque or withdrawal slip (optional)', h('div', {}, [fileInput, preview, dropzone])),
+        fieldBox('description', 'Note (optional)', note),
+      ];
+      action = 'pettyDeposit';
+      payloadOf = function () { return { amount: amount.value(), entry_date: date.value, description: note.value.trim() }; };
+    } else {
+      const expected = state.cash ? state.cash.balance : null;
+      const diff = h('p.hint.words');
+      amount.input.onamount = function () {
+        if (expected === null) return;
+        const d = amount.value() - expected;
+        diff.textContent = !amount.input.value ? '' : d === 0 ? 'Matches the records.' : (d < 0 ? 'Short by ' : 'Over by ') + fmtMoney(Math.abs(d)) + ' — the owners will be told.';
+      };
+      note.placeholder = 'Optional note';
+      body = [
+        h('p.hint', { text: 'Count all the cash in the box and enter the total. ' + (expected === null ? '' : 'The records say ' + fmtMoney(expected) + '. ') + 'Any difference is recorded and the balance then matches your count.' }),
+        fieldBox('counted', 'Cash counted', h('div', {}, [amount.el, diff])),
+        fieldBox('description', 'Note (optional)', note),
+      ];
+      action = 'pettyCount';
+      payloadOf = function () { return { counted: amount.input.value === '' ? '' : amount.value(), description: note.value.trim() }; };
+    }
+
+    const submit = h('button.btn.btn-primary.btn-big', { type: 'button', text: kind === 'count' ? 'Save the count' : 'Save' });
+    submit.addEventListener('click', async function () {
+      submit.disabled = true;
+      summary.hidden = true;
+      try {
+        if (preparing) { submit.textContent = 'Preparing photo…'; await preparing; }
+        submit.textContent = 'Saving…';
+        const payload = payloadOf();
+        if (attachment && kind !== 'count') payload.file = { name: attachment.name, mime: attachment.mime, base64: attachment.base64, sha256: attachment.sha256 };
+        const res = await Api.call(action, payload);
+        toast(kind === 'spend' ? 'Saved · ' + fmtMoney(res.balance) + ' left' : kind === 'deposit' ? 'Deposit recorded — waiting for the keeper to confirm'
+          : res.difference ? 'Count saved · ' + (res.difference < 0 ? 'short ' : 'over ') + fmtMoney(Math.abs(res.difference)) : 'Count saved · matches', 'ok');
+        state.cash = null;
+        homeTab = 'cash';
+        go('/');
+      } catch (err) {
+        if (err.code === 'VALIDATION' && err.details && err.details.length) showProblems(err.details);
+        else toast(err.message);
+      } finally {
+        submit.disabled = false;
+        submit.textContent = kind === 'count' ? 'Save the count' : 'Save';
+      }
+    });
+    mount(page([back, h('h1.title', { text: titles[kind] }), summary, h('section.form-section', {}, body.concat([errs._form])), submit]));
+  }
+
+  /** #/cash/<id>: one entry, its photo, and "cancel this entry". */
+  async function renderCashEntry(id) {
+    const back = h('a.back', { href: '#/', text: 'Back' });
+    mount(page([back, loading()]));
+    let x;
+    try { x = (await Api.call('pettyEntry', { id: id })).entry; } catch (err) { mount(page([back, h('p.empty', { text: err.message })])); return; }
+    if (location.hash !== '#/cash/' + encodeURIComponent(id)) return;
+    const row = function (k, v) { return v ? h('div.kv', {}, [h('span.k', { text: k }), h('span.v', { text: v })]) : null; };
+    const doc = x.entry_type === 'SPEND' || x.attachment
+      ? (x.attachment ? attachmentView(x.attachment) : h('div.doc-missing', { text: 'No receipt: ' + label('no_doc_reason', x.no_doc_reason) + (x.no_doc_note ? ' — ' + x.no_doc_note : '') }))
+      : null;
+    homeTab = 'cash';
+    mount(page([
+      back,
+      h('div.detail-grid', {}, [
+        doc ? h('div.detail-media', {}, [doc]) : null,
+        h('div.detail-side', {}, [
+          x.voided ? h('div.flag', { text: 'This entry was cancelled. See the cancelling entry in the list.' }) : null,
+          h('div.card', {}, [
+            h('div.item-top', {}, [h('span.amount.big', { text: x.entry_type === 'DEPOSIT' && x.status !== 'RECEIVED' ? fmtMoney(x.amount) : signedMoney(x.effect) }),
+              h('span.chip', { text: CASH_TYPE[x.entry_type] || x.entry_type })]),
+            row('Entry', x.entry_id),
+            row('Date', fmtDate(x.entry_date)),
+            row('Outlet', x.outlet_code),
+            row('Category', x.expense_category ? categoryLabel(x.expense_category) : ''),
+            row(x.entry_type === 'COUNT' ? 'Count' : 'What for', x.description),
+            row('Recorded by', x.recorded_by_name + ' · ' + fmtDateTime(x.created_at)),
+            x.entry_type === 'DEPOSIT' ? row('Status', x.status === 'PENDING' ? 'Waiting for the keeper to confirm' : x.status === 'CANCELLED' ? 'Cancelled' : 'Received') : null,
+            x.entry_type === 'DEPOSIT' && x.status === 'RECEIVED' ? row('Received', fmtMoney(x.received_amount) + ' by ' + x.confirmed_by_name + ' · ' + fmtDateTime(x.confirmed_at)) : null,
+            row('Cancels', x.voids_entry_id),
+            row('Reason', x.void_reason),
+          ]),
+          x.can_void ? confirmPanel({
+            open: x.entry_type === 'DEPOSIT' && x.status === 'PENDING' ? 'Cancel this deposit' : 'Recorded by mistake? Cancel this entry',
+            danger: true, required: true, label: 'Why is it wrong? (required)', placeholder: 'e.g. typed the amount twice',
+            intro: 'Nothing is deleted: a cancelling entry is added and the balance is corrected. The owners are told.',
+            confirm: 'Cancel entry',
+            run: async function (reason) {
+              const res = await Api.call('pettyVoid', { id: x.entry_id, reason: reason });
+              toast('Cancelled · balance ' + fmtMoney(res.balance), 'ok');
+              state.cash = null;
+              go('/');
+            },
+          }) : null,
+        ]),
+      ]),
+    ]));
   }
 
   // ----------------------------------------------------------- expense view
@@ -1692,6 +2030,7 @@
       const hadAll = Boolean(state.views.all);
       state.views = data.views;
       if (data.sendTo) state.ref.sendTo = data.sendTo;
+      if (state.cash && state.user.petty) state.cash = await Api.call('pettyCash');
       if (hadAll) state.views.all = (await Api.call('listExpenses', { view: 'all' })).expenses;
       state.user.telegramLinked = data.telegramLinked;
       state.refreshedAt = new Date();
@@ -1765,6 +2104,8 @@
     const params = new URLSearchParams(location.search);
     if (params.get('id')) {
       history.replaceState(null, '', location.pathname + '#/expense/' + encodeURIComponent(params.get('id')));
+    } else if (params.get('cash')) {
+      history.replaceState(null, '', location.pathname + '#/cash/' + encodeURIComponent(params.get('cash')));
     }
 
     const inApp = InApp.detect();
