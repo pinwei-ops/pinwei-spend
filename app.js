@@ -677,20 +677,38 @@
       h('span.dropzone-title', { text: 'Take or choose a photo' }),
       h('span.dropzone-sub', { text: kind === 'deposit' ? 'Cheque or withdrawal slip (optional)' : 'Receipt or bill. PDF works too.' }),
     ]);
-    fileInput.addEventListener('change', function () {
-      const f = fileInput.files[0];
+    // The latest photo chosen always wins (picked, dragged in, or chosen again after Remove).
+    let pickSeq = 0;
+    function pickFile(f) {
       if (!f) return;
+      const mine = ++pickSeq;
+      attachment = null;
+      if (errs.file) errs.file.hidden = true;
+      summary.hidden = true;
       preview.textContent = 'Preparing photo…';
-      preparing = Attachment.prepare(f, (state.limits && state.limits.maxUploadMb) || 10).then(function (a) {
+      const job = Attachment.prepare(f, (state.limits && state.limits.maxUploadMb) || 10).then(function (a) {
+        if (mine !== pickSeq) return;
         attachment = a;
         preview.textContent = '';
         preview.appendChild(h('div.preview-row', {}, [
           a.mime.indexOf('image/') === 0 ? h('img.thumb', { src: 'data:' + a.mime + ';base64,' + a.base64, alt: 'Receipt' }) : h('span.pdf', { text: 'PDF' }),
           h('div.preview-info', {}, [h('span', { text: f.name })]),
-          h('button.link', { type: 'button', text: 'Remove', onclick: function () { attachment = null; preview.textContent = ''; noDoc.hidden = false; } }),
+          h('button.link', { type: 'button', text: 'Remove', onclick: function () { pickSeq++; attachment = null; preview.textContent = ''; noDoc.hidden = false; } }),
         ]));
         noDoc.hidden = true;
-      }).catch(function (err) { attachment = null; preview.textContent = err.message; }).finally(function () { preparing = null; });
+      }).catch(function (err) { if (mine === pickSeq) { attachment = null; preview.textContent = err.message; } })
+        .finally(function () { if (preparing === job) preparing = null; });
+      preparing = job;
+    }
+    fileInput.addEventListener('change', function () {
+      pickFile(fileInput.files[0]);
+      fileInput.value = '';   // so the same file can be chosen again
+    });
+    ['dragenter', 'dragover'].forEach(function (t) { dropzone.addEventListener(t, function (ev) { ev.preventDefault(); dropzone.classList.add('drag'); }); });
+    ['dragleave', 'drop'].forEach(function (t) { dropzone.addEventListener(t, function () { dropzone.classList.remove('drag'); }); });
+    dropzone.addEventListener('drop', function (ev) {
+      ev.preventDefault();
+      pickFile(ev.dataTransfer && ev.dataTransfer.files[0]);
     });
     const reasonSel = h('select.input', {}, [h('option', { value: '', text: 'Choose a reason' })]
       .concat(state.ref.enums.filter(function (x) { return x.field === 'no_doc_reason' && x.value !== 'PURCHASE_NOT_ORDERED'; }).map(function (x) { return h('option', { value: x.value, text: x.label }); })));
@@ -2164,5 +2182,6 @@
     }
   }
 
+  ['dragover', 'drop'].forEach(function (t) { window.addEventListener(t, function (ev) { ev.preventDefault(); }); });
   window.addEventListener('load', start);
 })();
