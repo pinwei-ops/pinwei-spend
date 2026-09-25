@@ -287,6 +287,19 @@
         card.appendChild(h('div.tg-title', { text: 'Two taps' }));
         card.appendChild(h('p.hint', { text: '1. Open the bot and tap Start.  2. Come back here and tap Done.' }));
         card.appendChild(h('a.btn.btn-primary', { href: res.url, target: '_blank', rel: 'noopener', text: '1 · Open Telegram' }));
+        // Computers without the Telegram app, or a bot chat opened before: the code can also be sent by hand.
+        const m = String(res.url).match(/t\.me\/([^?]+)\?start=([A-Za-z0-9_-]+)/);
+        if (m) {
+          const cmd = '/start ' + m[2];
+          const copyBtn = h('button.link', { type: 'button', text: 'Copy', onclick: function () {
+            (navigator.clipboard ? navigator.clipboard.writeText(cmd) : Promise.reject()).then(function () { toast('Copied'); }, function () { toast('Select the text and copy it'); });
+          } });
+          card.appendChild(h('details.more-inline.tg-manual', {}, [
+            h('summary', { text: 'Start does nothing? Send the code by hand' }),
+            h('p.hint', { text: 'Open @' + m[1] + ' in Telegram (phone, desktop or web.telegram.org), send this message, then come back and tap Done:' }),
+            h('div.tg-code', {}, [h('code', { text: cmd }), copyBtn]),
+          ]));
+        }
         const err = h('p.error', { hidden: true });
         const done = h('button.btn', { type: 'button', text: '2 · Done, I tapped Start', onclick: async function () {
           done.disabled = true;

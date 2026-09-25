@@ -426,3 +426,6 @@ details.more[open] > summary::after, details.more-inline[open] > summary::after 
 .brand { min-width: 44px; }
 .hint .link, .doc-links .link, .viewer-close { display: inline-flex; align-items: center; min-height: 44px; }
 .error-summary a { display: inline-block; padding: 6px 0; }
+
+.tg-code { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 8px; background: var(--muted-bg); }
+.tg-code code { font-size: 1rem; user-select: all; word-break: break-all; }
