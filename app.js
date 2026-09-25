@@ -2052,12 +2052,19 @@
     return Array.prototype.some.call(document.querySelectorAll('textarea'), function (t) { return t.value.trim(); });
   }
 
+  let roleChanged = false;
   async function refreshViews(manual) {
     if (refreshing || !state.user) return;
     if (!manual && state.refreshedAt && Date.now() - state.refreshedAt.getTime() < MIN_GAP_MS) return;
     refreshing = true;
     try {
       const data = await Api.call('views');
+      // Role or outlet changed in the users tab: tabs and buttons depend on it, so start again.
+      if (data.me && (data.me.role !== state.user.role || data.me.outletCode !== state.user.outletCode || (data.me.petty || '') !== (state.user.petty || ''))) {
+        roleChanged = true;
+        if (onHome() && !userIsTyping()) { toast('Your access was changed — reloading…'); setTimeout(function () { location.reload(); }, 1500); }
+        return;
+      }
       const hadAll = Boolean(state.views.all);
       state.views = data.views;
       if (data.sendTo) state.ref.sendTo = data.sendTo;
@@ -2172,6 +2179,7 @@
       state.views = data.views;
       state.refreshedAt = new Date();
       window.addEventListener('hashchange', function () {
+        if (roleChanged && onHome()) { location.reload(); return; }
         route();
         if (onHome()) refreshViews(false); // coming back to the list: pick up changes made elsewhere
       });
