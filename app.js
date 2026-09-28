@@ -741,6 +741,7 @@
       const job = Attachment.prepare(f, (state.limits && state.limits.maxUploadMb) || 10).then(function (a) {
         if (mine !== pickSeq) return;
         attachment = a;
+        startUpload(a, 'petty');
         preview.textContent = '';
         preview.appendChild(h('div.preview-row', {}, [
           a.mime.indexOf('image/') === 0 ? h('img.thumb', { src: 'data:' + a.mime + ';base64,' + a.base64, alt: 'Receipt' }) : h('span.pdf', { text: 'PDF' }),
@@ -886,8 +887,13 @@
         if (preparing) { submit.textContent = 'Preparing photo…'; await preparing; }
         submit.textContent = 'Saving…';
         const payload = payloadOf();
-        if (attachment && kind !== 'count') payload.file = { name: attachment.name, mime: attachment.mime, base64: attachment.base64, sha256: attachment.sha256 };
-        const res = await Api.call(action, payload);
+        if (attachment && kind !== 'count') Object.assign(payload, await filePayload(attachment));
+        let res;
+        try { res = await Api.call(action, payload); } catch (ex) {
+          if (!uploadExpired(ex, attachment)) throw ex;
+          delete payload.fileRef;
+          res = await Api.call(action, Object.assign(payload, await filePayload(attachment)));
+        }
         toast(kind === 'spend' ? 'Saved · ' + fmtMoney(res.balance) + ' left' : kind === 'deposit' ? 'Deposit recorded — waiting for the keeper to confirm'
           : res.difference ? 'Count saved · ' + (res.difference < 0 ? 'short ' : 'over ') + fmtMoney(Math.abs(res.difference)) : 'Count saved · matches', 'ok');
         state.cash = null;
@@ -1258,6 +1264,29 @@
     check();
   }
 
+  /**
+   * Uploads a prepared photo at once, while the form is still being filled in;
+   * the form then sends only its reference. If this fails, the form sends the
+   * photo itself, as before.
+   */
+  function startUpload(att, purpose) {
+    att.upload = Api.call('uploadFile', { purpose: purpose, file: { name: att.name, mime: att.mime, base64: att.base64, sha256: att.sha256 } })
+      .then(function (r) { att.ref = r.ref; return r.ref; })
+      .catch(function () { att.ref = null; return null; });
+    return att.upload;
+  }
+  /** What to send for a photo: its reference when the upload is done, else the photo. */
+  async function filePayload(att) {
+    if (att.upload) await att.upload;
+    return att.ref ? { fileRef: att.ref } : { file: { name: att.name, mime: att.mime, base64: att.base64, sha256: att.sha256 } };
+  }
+  /** The reference ran out (6 h): send the photo itself next time. */
+  function uploadExpired(err, att) {
+    const hit = att && err && err.details && err.details.some(function (d) { return d.code === 'FILE_EXPIRED'; });
+    if (hit) { att.ref = null; att.upload = null; }
+    return hit;
+  }
+
   /** Small reusable "reason + confirm" panel. */
   let panelSeq = 0;
   function confirmPanel(opts) {
@@ -1625,7 +1654,7 @@
       err.hidden = true;
       paintProof('working');
       preparing = Attachment.prepare(f, state.limits.maxUploadMb)
-        .then(function (a) { proof = a; })
+        .then(function (a) { proof = a; startUpload(a, 'proof'); })
         .catch(function (ex) { err.textContent = ex.message; err.hidden = false; })
         .finally(function () { preparing = null; paintProof(); });
     });
@@ -1705,14 +1734,21 @@
       confirmBtn.disabled = true;
       try {
         confirmBtn.textContent = 'Saving…';
-        const res = await Api.call('recordPayment', {
+        const base = {
           id: e.expense_id,
           amount: amount,
           paid_at: dateInput.value,
           payment_method: methodSelect.value,
           source_account: sourceInput.value.trim(),
-          file: proof ? { name: proof.name, mime: proof.mime, base64: proof.base64, sha256: proof.sha256 } : null,
-        });
+          file: null,
+        };
+        let res;
+        try {
+          res = await Api.call('recordPayment', Object.assign({}, base, proof ? await filePayload(proof) : {}));
+        } catch (ex) {
+          if (!uploadExpired(ex, proof)) throw ex;
+          res = await Api.call('recordPayment', Object.assign({}, base, await filePayload(proof)));
+        }
         if (res.expense.status === 'PAID') removeFrom('to_pay', e.expense_id); else upsert('to_pay', res.expense);
         if (res.expense.submitted_by === state.user.userId) upsert('mine', res.expense);
         state.detail = null;
@@ -2091,6 +2127,7 @@
       paintAttachment('working');
       preparing = Attachment.prepare(file, state.limits.maxUploadMb).then(function (a) {
         attachment = a;
+        startUpload(a, 'expense');
         paintAttachment();
       }).catch(function (err) {
         paintAttachment();
@@ -2289,10 +2326,11 @@
       submitBtn.disabled = true;
       try {
         if (preparing) { submitBtn.textContent = 'Preparing photo…'; await preparing; }
-        submitBtn.textContent = attachment ? 'Uploading…' : 'Submitting…';
+        submitBtn.textContent = attachment && !attachment.ref ? 'Uploading photo…' : 'Submitting…';
         const payload = {};
         DRAFT_FIELDS.forEach(function (f) { if (values[f] !== undefined) payload[f] = values[f]; });
-        if (attachment) { payload.file = { name: attachment.name, mime: attachment.mime, base64: attachment.base64, sha256: attachment.sha256 }; payload.no_doc_reason = ''; }
+        if (attachment) { Object.assign(payload, await filePayload(attachment)); payload.no_doc_reason = ''; }
+        submitBtn.textContent = 'Submitting…';
         if (!attachment && keptAttachment) payload.no_doc_reason = '';
         if (!payload.no_doc_reason) payload.no_doc_note = '';
         payload.confirmWarnings = Boolean(confirmWarnings);
@@ -2313,7 +2351,9 @@
               : 'Saved ' + res.expense.expense_id, 'ok');
         go('/');
       } catch (err) {
-        if (err.code === 'VALIDATION' && err.details.length) {
+        if (uploadExpired(err, attachment)) {
+          retryAfterExpiry = true;   // handled below, after the button is reset
+        } else if (err.code === 'VALIDATION' && err.details.length) {
           if (!editing && err.details.some(function (d) { return d.field === 'send_to'; })) reloadSendTo();
           err.details.forEach(function (d) { showError(d.field in fieldEls ? d.field : '_form', d.message); });
           if (err.details.some(function (d) { return more.contains(fieldEls[d.field] || null); })) more.open = true;
@@ -2328,7 +2368,10 @@
         submitBtn.disabled = false;
         checkRequired();
       }
+      // The photo's upload reference ran out: send again once, with the photo itself.
+      if (retryAfterExpiry) { retryAfterExpiry = false; return submit(confirmWarnings); }
     }
+    let retryAfterExpiry = false;
 
     function showWarnings(warnings) {
       warnBox.textContent = '';
