@@ -126,7 +126,8 @@ window.Api = (function () {
     const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 90000) : null;
     let res;
     try {
-      const body = JSON.stringify({ action: action, idToken: idToken, payload: payload || {}, perf: debug || undefined });
+      // deferNotify: the server answers as soon as the data is saved; the messages go out in the follow-up call below.
+      const body = JSON.stringify({ action: action, idToken: idToken, payload: payload || {}, perf: debug || undefined, deferNotify: true });
       res = await fetch(cfg.API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -176,6 +177,18 @@ window.Api = (function () {
     debugBox.textContent = (line + '\n' + debugBox.textContent).split('\n').slice(0, 12).join('\n');
   }
 
+  /**
+   * Sends the Telegram messages of a saved action, in the background (keepalive:
+   * also when the tab is closed right away). If this never arrives, the server
+   * sends them itself within 5 minutes.
+   */
+  function sendNotifications(key) {
+    const t0 = Date.now();
+    getToken().then(function (tok) { return post('sendNotifications', tok, { key: key }); })
+      .then(function (body) { logTiming('  messages sent', Date.now() - t0, body && body.ms, body && body.perf); })
+      .catch(function () { /* the server's 5-minute run sends them */ });
+  }
+
   async function call(action, payload) {
     const t0 = Date.now();
     const tok = await getToken();
@@ -186,6 +199,7 @@ window.Api = (function () {
       token = null;
       body = await post(action, await getToken('Your sign-in expired. Sign in to continue — your form is kept.'), payload);
     }
+    if (body.ok && body.notifyKey) sendNotifications(body.notifyKey);
     if (!body.ok) {
       const err = new Error(body.message || body.error);
       err.code = body.error;
