@@ -29,15 +29,18 @@ window.Api = (function () {
     return token ? String(claims(token).email || '').toLowerCase() : '';
   }
 
+  // Google's sign-in lasts about an hour. It is kept for that hour (also after the
+  // tab is closed), so reopening the app doesn't wait for Google again. Sign out clears it.
   function storeToken(jwt) {
     token = jwt;
     tokenExp = decodeExp(jwt);
-    try { sessionStorage.setItem(TOKEN_KEY, jwt); } catch (err) { /* private mode */ }
+    try { localStorage.setItem(TOKEN_KEY, jwt); } catch (err) { /* private mode */ }
   }
 
   function loadStoredToken() {
     try {
-      const jwt = sessionStorage.getItem(TOKEN_KEY);
+      sessionStorage.removeItem(TOKEN_KEY);   // older versions kept it per tab
+      const jwt = localStorage.getItem(TOKEN_KEY);
       if (jwt) { token = jwt; tokenExp = decodeExp(jwt); }
     } catch (err) { /* private mode */ }
   }
@@ -113,7 +116,7 @@ window.Api = (function () {
   function signOut() {
     token = null;
     tokenExp = 0;
-    try { sessionStorage.removeItem(TOKEN_KEY); } catch (err) { /* private mode */ }
+    try { localStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(TOKEN_KEY); } catch (err) { /* private mode */ }
     google.accounts.id.disableAutoSelect();
   }
 
@@ -153,8 +156,27 @@ window.Api = (function () {
    * Calls a backend action. Resolves with `data`, or rejects with an Error
    * carrying .code and .details from the backend.
    */
+  const debug = /[?&]debug=1/.test(location.search) || (function () { try { return sessionStorage.getItem('pw_debug') === '1'; } catch (e) { return false; } })();
+  if (debug) { try { sessionStorage.setItem('pw_debug', '1'); } catch (e) { /* ok */ } }
+  let debugBox = null;
+  function logTiming(action, totalMs, serverMs) {
+    const line = action + ': ' + (totalMs / 1000).toFixed(1) + ' s' + (serverMs ? ' (server ' + (serverMs / 1000).toFixed(1) + ' s)' : '');
+    if (window.console) console.info('[timing] ' + line);
+    if (!debug) return;
+    if (!debugBox) {
+      debugBox = document.createElement('div');
+      debugBox.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99;max-width:70vw;padding:6px 8px;border-radius:8px;background:rgba(0,0,0,.75);color:#fff;font:12px/1.4 monospace;pointer-events:none;white-space:pre';
+      document.body.appendChild(debugBox);
+    }
+    debugBox.textContent = (line + '\n' + debugBox.textContent).split('\n').slice(0, 6).join('\n');
+  }
+
   async function call(action, payload) {
-    let body = await post(action, await getToken(), payload);
+    const t0 = Date.now();
+    const tok = await getToken();
+    const tSend = Date.now();
+    let body = await post(action, tok, payload);
+    logTiming(action + (tSend - t0 > 300 ? ' [sign-in ' + ((tSend - t0) / 1000).toFixed(1) + ' s]' : ''), Date.now() - t0, body && body.ms);
     if (!body.ok && /^AUTH_(INVALID_TOKEN|EXPIRED|MISSING_TOKEN)$/.test(body.error)) {
       token = null;
       body = await post(action, await getToken('Your sign-in expired. Sign in to continue — your form is kept.'), payload);

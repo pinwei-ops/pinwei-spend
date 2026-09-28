@@ -662,8 +662,16 @@
         loadCash(true);
       } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     });
-    card.appendChild(h('label.label', { text: 'Amount you received' }));
+    card.appendChild(starLabel(h('label.label', { text: 'Amount you received' })));
     card.appendChild(amount.el);
+    let gotTouched = false;
+    const checkGot = function () {
+      btn.disabled = !(amount.value() > 0);
+      if (!(amount.value() > 0) && gotTouched) { err.textContent = 'Enter the amount you received. This field is required.'; err.hidden = false; err.dataset.req = '1'; }
+      else if (err.dataset.req) { err.hidden = true; delete err.dataset.req; }
+    };
+    amount.input.addEventListener('input', function () { gotTouched = true; checkGot(); });
+    checkGot();
     card.appendChild(err);
     card.appendChild(btn);
     return card;
@@ -963,6 +971,7 @@
   }
 
   function attachmentView(att) {
+    if (att && att.pending) return h('div.doc-missing.doc-loading', { 'data-slot': 'attachment' }, [h('div.spinner'), h('span', { text: 'Loading photo…' })]);
     if (!att) return h('div.doc-missing', { text: 'No document attached' });
     if (att.error) return h('div.doc-missing', { text: att.error });
     const url = URL.createObjectURL(base64ToBlob(att.base64, att.mime));
@@ -1030,16 +1039,63 @@
   }
 
   /** opts.silent: background refresh — no spinner, keep scroll, re-render only if something changed. */
+  // Photos of the last expenses opened (they don't change once uploaded).
+  const filesCache = {};
+  function knownItem(id) {
+    const lists = ['to_approve', 'to_pay', 'to_check', 'mine', 'all'];
+    for (let i = 0; i < lists.length; i++) {
+      const hit = (state.views[lists[i]] || []).find(function (x) { return x.expense_id === id; });
+      if (hit) return hit;
+    }
+    return null;
+  }
+  /** Puts the photos into their placeholders once they arrive (the rest of the page is left alone). */
+  function fillFiles(e, files) {
+    e.attachment = e.attachment ? (files.attachment || null) : null;
+    (e.payments || []).forEach(function (p) { if (p.proof) p.proof = (files.proofs || {})[p.payment_id] || null; });
+    const slot = document.querySelector('[data-slot="attachment"]');
+    if (slot) slot.replaceWith(attachmentView(files.attachment || null));
+    (e.payments || []).forEach(function (p) {
+      const ph = document.querySelector('[data-proof="' + p.payment_id + '"]');
+      if (!ph) return;
+      const view = proofView(p);
+      if (view) ph.replaceWith(view); else ph.remove();
+    });
+  }
+
   async function renderExpense(id, opts) {
     const silent = Boolean(opts && opts.silent);
     const backLink = function () { return h('a.back', { href: '#/', text: 'Back' }); };
-    if (!silent) mount(page([backLink(), loading()]));
+    if (!silent) {
+      // What the list already knows shows at once; the full details follow.
+      const it = knownItem(id);
+      mount(page([backLink(), it ? h('div.card', { 'data-status': it.status }, [
+        h('div.item-top', {}, [h('span.amount.big', { text: fmtMoney(it.amount_total) }), statusChip(it.status)]),
+        h('div.item-mid', { text: categoryShort(it.expense_category) + (it.supplier_name ? ' · ' + it.supplier_name : it.description ? ' · ' + it.description : '') }),
+        h('div.item-meta', {}, [h('span', { text: it.expense_id }), h('span', { text: fmtDate(it.created_at) })]),
+      ]) : null, loading('Loading details…')]));
+    }
+    // Details and photos are asked for at the same time.
+    const filesPromise = filesCache[id] ? Promise.resolve(filesCache[id])
+      : Api.call('getExpenseFiles', { id: id }).then(function (f) { filesCache[id] = f; return f; });
+    filesPromise.catch(function () { /* the detail call reports problems */ });
     let e;
     try {
-      e = await Api.call('getExpense', { id: id });
+      e = await Api.call('getExpense', { id: id, lite: true });
     } catch (err) {
       if (!silent) mount(page([backLink(), h('p.empty', { text: err.message })]));
       return;
+    }
+    if (filesCache[id]) {
+      e.attachment = e.attachment ? filesCache[id].attachment : null;
+      (e.payments || []).forEach(function (p) { if (p.proof) p.proof = filesCache[id].proofs[p.payment_id] || null; });
+    } else {
+      filesPromise.then(function (files) {
+        if (location.hash === '#/expense/' + encodeURIComponent(id)) fillFiles(e, files);
+      }, function () {
+        const slot = document.querySelector('[data-slot="attachment"]');
+        if (slot) slot.replaceWith(h('div.doc-missing', { text: 'The photo could not be loaded. Go back and open it again.' }));
+      });
     }
     if (location.hash !== '#/expense/' + encodeURIComponent(id)) return; // user navigated away meanwhile
     if (silent && state.detail && state.detail.expense_id === e.expense_id &&
@@ -1164,13 +1220,12 @@
       panel.textContent = '';
       err.hidden = true;
       reasonBox.placeholder = reject ? 'Why is this rejected?' : 'What should the submitter add or fix?';
-      panel.appendChild(h('label.label', { for: 'decision_reason', text: reject ? 'Reason for rejecting (required)' : 'What is missing? (required)' }));
+      panel.appendChild(starLabel(h('label.label', { for: 'decision_reason', text: reject ? 'Reason for rejecting' : 'What is missing?' })));
       panel.appendChild(reasonBox);
       panel.appendChild(err);
-      panel.appendChild(h('div.row', {}, [
-        h('button.btn', { type: 'button', text: 'Cancel', onclick: showMain }),
-        h('button.btn' + (reject ? '.btn-danger' : '.btn-primary'), { type: 'button', text: reject ? 'Reject' : 'Send back', onclick: function () { send(decision); } }),
-      ]));
+      const act = h('button.btn' + (reject ? '.btn-danger' : '.btn-primary'), { type: 'button', text: reject ? 'Reject' : 'Send back', onclick: function () { send(decision); } });
+      panel.appendChild(h('div.row', {}, [h('button.btn', { type: 'button', text: 'Cancel', onclick: showMain }), act]));
+      requireText(reasonBox, act, err, reject ? 'Write why it is rejected. This field is required.' : 'Write what is missing. This field is required.');
       reasonBox.focus();
     }
     showMain();
@@ -1178,6 +1233,30 @@
   }
 
   // ------------------------------------------------------- lifecycle panels
+
+  /** Red * after a label's text ("(required)" written in the text is dropped). */
+  function starLabel(labelEl) {
+    labelEl.textContent = labelEl.textContent.replace(/\s*\(required\)\s*$/i, '');
+    labelEl.appendChild(h('span.req-star', { text: ' *', 'aria-hidden': 'true' }));
+    return labelEl;
+  }
+
+  /**
+   * A required text box in a panel: its button waits until something is typed, and
+   * "required" shows once the box was typed in and emptied again.
+   */
+  function requireText(box, button, errEl, message) {
+    box.setAttribute('aria-required', 'true');
+    let touched = false;
+    function check() {
+      const ok = box.value.trim() !== '';
+      button.disabled = !ok;
+      if (!ok && touched) { errEl.textContent = message; errEl.hidden = false; errEl.dataset.req = '1'; }
+      else if (errEl.dataset.req) { errEl.hidden = true; delete errEl.dataset.req; }
+    }
+    box.oninput = function () { touched = true; check(); };
+    check();
+  }
 
   /** Small reusable "reason + confirm" panel. */
   let panelSeq = 0;
@@ -1193,10 +1272,12 @@
     function expanded() {
       panel.textContent = '';
       if (opts.intro) panel.appendChild(h('p.confirm-text', { text: opts.intro }));
-      panel.appendChild(h('label.label', { for: boxId, text: opts.label }));
+      const lbl = h('label.label', { for: boxId, text: opts.label });
+      panel.appendChild(opts.required ? starLabel(lbl) : lbl);
       panel.appendChild(box);
       panel.appendChild(err);
       const go2 = h('button.btn' + (opts.danger ? '.btn-danger' : '.btn-approve'), { type: 'button', text: opts.confirm });
+      if (opts.required) requireText(box, go2, err, 'This field is required. Please write a reason.');
       go2.addEventListener('click', async function () {
         const text = box.value.trim();
         if (opts.required && !text) { err.textContent = 'Please write a reason.'; err.hidden = false; return; }
@@ -1292,8 +1373,9 @@
       panel.appendChild(h('p.hint', {}, ['Goes back to ', h('strong', { text: target.label }),
         target.value === e.approver_id ? ', who approved it.' : e.approver_id ? ' (the person who approved it can no longer review).' : ' (nobody approved it before).',
         ' It cannot be paid until it is approved again. The submitter is not told.']));
-      panel.appendChild(h('label.label', { for: 'review_reason', text: 'What looks wrong? (required)' }));
+      panel.appendChild(starLabel(h('label.label', { for: 'review_reason', text: 'What looks wrong?' })));
       panel.appendChild(box);
+      requireText(box, send, err, 'Write what looks wrong. This field is required.');
       panel.appendChild(err);
       panel.appendChild(h('div.row', {}, [h('button.btn', { type: 'button', text: 'Back', onclick: collapsed }), send]));
       box.focus();
@@ -1405,8 +1487,16 @@
     ]);
   }
 
-  function paymentCard(p, e) {
+  /** The transfer confirmation of one payment: thumbnail / PDF link, or a placeholder while it loads. */
+  function proofView(p) {
+    if (p.proof && p.proof.pending) return h('p.hint', { 'data-proof': p.payment_id, text: 'Loading transfer confirmation…' });
     const proofUrl = p.proof && p.proof.base64 ? URL.createObjectURL(base64ToBlob(p.proof.base64, p.proof.mime)) : null;
+    if (!proofUrl) return null;
+    if (p.proof.mime.indexOf('image/') === 0) return h('img.proof-thumb', { src: proofUrl, alt: 'Transfer confirmation', onclick: function () { openViewer(proofUrl); } });
+    return h('a.link', { href: proofUrl, target: '_blank', rel: 'noopener', text: 'Open transfer confirmation (PDF)' });
+  }
+
+  function paymentCard(p, e) {
     const reversal = p.payment_seq === 'REVERSAL';
     const chip = reversal ? h('span.chip.bad', { text: 'Voids ' + p.reverses_payment_id })
       : p.voided ? h('span.chip.muted', { text: 'Voided' })
@@ -1421,8 +1511,7 @@
         h('span', { text: 'by ' + p.recorded_by_name }),
         p.source_account ? h('span', { text: 'from ' + p.source_account }) : null,
       ]),
-      proofUrl && p.proof.mime.indexOf('image/') === 0 ? h('img.proof-thumb', { src: proofUrl, alt: 'Transfer confirmation', onclick: function () { openViewer(proofUrl); } }) : null,
-      proofUrl && p.proof.mime === 'application/pdf' ? h('a.link', { href: proofUrl, target: '_blank', rel: 'noopener', text: 'Open transfer confirmation (PDF)' }) : null,
+      proofView(p),
       p.can_void ? confirmPanel({
         open: 'Recorded by mistake? Void this payment', danger: true, required: true,
         intro: 'Only for a payment recorded wrongly (wrong amount, wrong expense, recorded twice). Nothing is deleted: a reversal is added to the history and the owners are told.',
@@ -1480,8 +1569,42 @@
       const digits = amountInput.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '');
       amountInput.value = digits ? money.format(Number(digits)) : '';
       amount = Number(digits) || 0;
+      payTouched.amount = true;
       paintButton();
+      checkPay();
     });
+
+    // Required: amount, date, method, and the transfer confirmation for a bank transfer.
+    const payTouched = {};
+    const amountErr = h('p.error', { hidden: true });
+    const dateErr = h('p.error', { hidden: true });
+    const proofErr = h('p.error', { hidden: true });
+    const proofLabel = h('span.label', { text: 'Transfer confirmation' });
+    const payMissing = h('p.hint.missing-line', { hidden: true, 'aria-live': 'polite' });
+    function checkPay(showAll) {
+      const bank = methodSelect.value === 'BANK_TRANSFER';
+      const rules = [
+        ['amount', 'Amount', amountErr, amount > 0, 'Enter the amount paid. This field is required.'],
+        ['date', 'Date', dateErr, Boolean(dateInput.value), 'Choose the payment date. This field is required.'],
+        ['proof', 'Transfer confirmation', proofErr, !bank || Boolean(proof || preparing), 'Attach the transfer confirmation. It is required for a bank transfer.'],
+      ];
+      const missing = [];
+      rules.forEach(function (r) {
+        if (r[3]) { r[2].hidden = true; return; }
+        missing.push(r[1]);
+        if (showAll) payTouched[r[0]] = true;
+        if (payTouched[r[0]]) { r[2].textContent = r[4]; r[2].hidden = false; }
+      });
+      const star = proofLabel.querySelector('.req-star');
+      if (bank && !star) proofLabel.appendChild(h('span.req-star', { text: ' *', 'aria-hidden': 'true' }));
+      if (!bank && star) star.remove();
+      if (!busy) btn.disabled = missing.length > 0 || amount > balance;
+      payMissing.textContent = missing.length ? 'Still needed: ' + missing.join(', ') : '';
+      payMissing.hidden = !missing.length;
+      return missing;
+    }
+    dateInput.addEventListener('change', function () { payTouched.date = true; checkPay(); });
+    methodSelect.addEventListener('change', function () { checkPay(); });
 
     function paintProof(status) {
       proofBox.textContent = '';
@@ -1490,9 +1613,10 @@
         proofBox.appendChild(h('div.preview-row', {}, [
           proof.mime.indexOf('image/') === 0 ? h('img.thumb', { src: 'data:' + proof.mime + ';base64,' + proof.base64, alt: 'Transfer confirmation' }) : h('span.pdf', { text: 'PDF' }),
           h('div.preview-info', {}, [h('span', { text: proof.name }), h('span.hint', { text: Math.round(proof.sizeAfter / 1024) + ' KB' })]),
-          h('button.link', { type: 'button', text: 'Remove', onclick: function () { proof = null; fileInput.value = ''; paintProof(); } }),
+          h('button.link', { type: 'button', text: 'Remove', onclick: function () { proof = null; fileInput.value = ''; payTouched.proof = true; paintProof(); } }),
         ]));
       }
+      checkPay();
     }
     fileInput.addEventListener('change', function () {
       const f = fileInput.files[0];
@@ -1512,6 +1636,7 @@
     /** Step 1: catch the obvious mistakes before showing the summary. */
     async function review() {
       if (busy) return;
+      if (checkPay(true).length) return;
       err.hidden = true;
       if (preparing) { btn.disabled = true; btn.textContent = 'Preparing photo…'; await preparing; btn.disabled = false; paintButton(); }
       const problem = !(amount > 0) ? 'Enter the amount paid.'
@@ -1608,16 +1733,18 @@
     amountInput.id = 'pay_amount';
     dateInput.id = 'pay_date';
     methodSelect.id = 'pay_method';
-    [fileInput, proofBox,
-      h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['Attach transfer confirmation']),
-      h('div.field', {}, [h('label.label', { for: 'pay_amount', text: 'Amount paid' }), h('div.money-wrap', {}, [amountInput, h('span.suffix', { text: '₫' })]), words, hint]),
+    [h('div.field', {}, [proofLabel, fileInput, proofBox,
+        h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['Attach transfer confirmation']), proofErr]),
+      h('div.field', {}, [starLabel(h('label.label', { for: 'pay_amount', text: 'Amount paid' })), h('div.money-wrap', {}, [amountInput, h('span.suffix', { text: '₫' })]), words, hint, amountErr]),
       h('div.grid2', {}, [
-        h('div.field', {}, [h('label.label', { for: 'pay_date', text: 'Paid on' }), dateInput]),
-        h('div.field', {}, [h('label.label', { for: 'pay_method', text: 'Method' }), methodSelect]),
+        h('div.field', {}, [starLabel(h('label.label', { for: 'pay_date', text: 'Paid on' })), dateInput, dateErr]),
+        h('div.field', {}, [starLabel(h('label.label', { for: 'pay_method', text: 'Method' })), methodSelect]),
       ]),
       h('details.more-inline', {}, [h('summary', { text: 'Paid from which account? (optional)' }), sourceInput]),
+      payMissing,
       btn,
     ].forEach(function (n) { formWrap.appendChild(n); });
+    checkPay();
 
     return h('div.decide', {}, [
       h('h2.section-title', { text: 'Record payment' }),
@@ -1651,6 +1778,17 @@
       }
     }
     if (!e.can.edit || !e.editable) { go('/expense/' + encodeURIComponent(id)); return; }
+    if (e.attachment && e.attachment.pending) {
+      // The edit form shows the current photo: wait for it if it is still on its way.
+      mount(page([loading()]));
+      try {
+        const f = filesCache[id] || await Api.call('getExpenseFiles', { id: id });
+        filesCache[id] = f;
+        e = Object.assign({}, e, { attachment: f.attachment || null });
+      } catch (err) {
+        e = Object.assign({}, e, { attachment: { error: 'The current photo could not be loaded.' } });
+      }
+    }
     renderForm(e);
   }
 

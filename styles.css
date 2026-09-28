@@ -260,6 +260,7 @@ details.more-inline > summary { min-height: 40px; display: flex; align-items: ce
 details.more-inline[open] > .input { margin-top: 6px; }
 .filters { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .warn-text { color: var(--warn); font-weight: 500; }
+.doc-loading { display: flex; flex-direction: column; gap: 10px; color: var(--muted); border-style: dashed; border-color: var(--line); background: none; }
 /* Required fields */
 .req-star { color: var(--bad); font-weight: 700; }
 .missing-line { margin: 0 0 8px; text-align: center; color: var(--muted); }
