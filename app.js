@@ -657,9 +657,9 @@
       if (got !== Number(x.amount) && !window.confirm('You received ' + fmtMoney(got) + ', not ' + fmtMoney(x.amount) + '. The owners will be told about the difference. Continue?')) return;
       btn.disabled = true;
       try {
-        await Api.call('pettyConfirm', { id: x.entry_id, received_amount: got });
+        const res = await Api.call('pettyConfirm', { id: x.entry_id, received_amount: got });
         toast('Received ' + fmtMoney(got), 'ok');
-        loadCash(true);
+        if (res.cash) { state.cash = res.cash; if (onHome() && homeTab === 'cash') renderHome(true); } else loadCash(true);
       } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     });
     card.appendChild(starLabel(h('label.label', { text: 'Amount you received' })));
@@ -896,7 +896,7 @@
         }
         toast(kind === 'spend' ? 'Saved · ' + fmtMoney(res.balance) + ' left' : kind === 'deposit' ? 'Deposit recorded — waiting for the keeper to confirm'
           : res.difference ? 'Count saved · ' + (res.difference < 0 ? 'short ' : 'over ') + fmtMoney(Math.abs(res.difference)) : 'Count saved · matches', 'ok');
-        state.cash = null;
+        state.cash = res.cash || null;   // the answer carries the updated Cash tab
         homeTab = 'cash';
         go('/');
       } catch (err) {
@@ -917,10 +917,29 @@
   /** #/cash/<id>: one entry, its photo, and "cancel this entry". */
   async function renderCashEntry(id) {
     const back = h('a.back', { href: '#/', text: 'Back' });
-    mount(page([back, loading()]));
+    const here = function () { return location.hash === '#/cash/' + encodeURIComponent(id); };
+    // Already in the Cash list: shown at once; only the photo is fetched.
+    const known = state.cash ? (state.cash.pending || []).concat(state.cash.entries || []).filter(function (e) { return e.entry_id === id; })[0] : null;
+    if (known) {
+      drawCashEntry(back, Object.assign({}, known, { attachment: known.has_doc ? { pending: true } : null }));
+      if (!known.has_doc) return;
+    } else {
+      mount(page([back, loading()]));
+    }
     let x;
-    try { x = (await Api.call('pettyEntry', { id: id })).entry; } catch (err) { mount(page([back, h('p.empty', { text: err.message })])); return; }
-    if (location.hash !== '#/cash/' + encodeURIComponent(id)) return;
+    try { x = (await Api.call('pettyEntry', { id: id })).entry; } catch (err) {
+      if (!here()) return;
+      if (known) { const slot = document.querySelector('[data-slot="attachment"]'); if (slot) slot.replaceWith(h('div.doc-missing', { text: 'Could not load the photo: ' + err.message })); }
+      else mount(page([back, h('p.empty', { text: err.message })]));
+      return;
+    }
+    if (!here()) return;
+    if (!known) { drawCashEntry(back, x); return; }
+    const slot = document.querySelector('[data-slot="attachment"]');
+    if (slot) slot.replaceWith(x.attachment ? attachmentView(x.attachment) : h('div.doc-missing', { text: 'The photo could not be loaded.' }));
+  }
+
+  function drawCashEntry(back, x) {
     const row = function (k, v) { return v ? h('div.kv', {}, [h('span.k', { text: k }), h('span.v', { text: v })]) : null; };
     const doc = x.entry_type === 'SPEND' || x.attachment
       ? (x.attachment ? attachmentView(x.attachment) : h('div.doc-missing', { text: 'No receipt: ' + label('no_doc_reason', x.no_doc_reason) + (x.no_doc_note ? ' — ' + x.no_doc_note : '') }))
@@ -954,7 +973,7 @@
             run: async function (reason) {
               const res = await Api.call('pettyVoid', { id: x.entry_id, reason: reason });
               toast('Cancelled · balance ' + fmtMoney(res.balance), 'ok');
-              state.cash = null;
+              state.cash = res.cash || null;
               go('/');
             },
           }) : null,
@@ -2443,7 +2462,7 @@
     if (!manual && state.refreshedAt && Date.now() - state.refreshedAt.getTime() < MIN_GAP_MS) return;
     refreshing = true;
     try {
-      const data = await Api.call('views');
+      const data = await Api.call('views', { cash: Boolean(state.user.petty) });
       // Role or outlet changed in the users tab: tabs and buttons depend on it, so start again.
       if (data.me && (data.me.role !== state.user.role || data.me.outletCode !== state.user.outletCode || (data.me.petty || '') !== (state.user.petty || ''))) {
         roleChanged = true;
@@ -2454,7 +2473,7 @@
       state.views = data.views;
       if (data.sendTo) state.ref.sendTo = data.sendTo;
       Object.keys(savingIds).forEach(function (id) { removeFrom('to_approve', id); });
-      if (state.cash && state.user.petty) state.cash = await Api.call('pettyCash');
+      if (data.cash) state.cash = data.cash;
       if (hadAll) state.views.all = (await Api.call('listExpenses', { view: 'all' })).expenses;
       state.user.telegramLinked = data.telegramLinked;
       state.refreshedAt = new Date();
@@ -2604,6 +2623,7 @@
     state.ref = data.ref;
     state.limits = data.limits;
     state.views = data.views;
+    if (data.cash !== undefined) state.cash = data.cash;
   }
   function saveStartData() {
     try {
@@ -2612,7 +2632,7 @@
       delete views.all;   // the full chain list is loaded when that tab is opened
       localStorage.setItem(START_KEY, JSON.stringify({
         email: String(state.user.email).toLowerCase(), savedAt: Date.now(),
-        data: { user: state.user, ref: state.ref, limits: state.limits, views: views },
+        data: { user: state.user, ref: state.ref, limits: state.limits, views: views, cash: state.user.petty ? state.cash : null },
       }));
     } catch (err) { /* private mode or full: start normally next time */ }
   }
