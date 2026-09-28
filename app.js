@@ -172,7 +172,7 @@
         h('span.who-role', { text: label('role', state.user.role) }),
       ]),
       h('button.link', { type: 'button', title: 'Switch light or dark theme', text: currentTheme() === 'dark' ? 'Light' : 'Dark', onclick: toggleTheme }),
-      h('button.link', { type: 'button', text: 'Sign out', onclick: function () { if (!window.confirm('Sign out of Pin Wei Spend?')) return; Api.signOut(); location.reload(); } }),
+      h('button.link', { type: 'button', text: 'Sign out', onclick: function () { if (!window.confirm('Sign out of Pin Wei Spend?')) return; forgetStartData(); Api.signOut(); location.reload(); } }),
     ])]);
   }
 
@@ -2277,6 +2277,7 @@
       if (hadAll) state.views.all = (await Api.call('listExpenses', { view: 'all' })).expenses;
       state.user.telegramLinked = data.telegramLinked;
       state.refreshedAt = new Date();
+      saveStartData();
       if (onHome() && !userIsTyping() && !document.querySelector('.overlay, .viewer')) renderHome(true);
     } catch (err) {
       if (manual) toast(err.message);
@@ -2375,14 +2376,10 @@
       renderSignIn();
       await Api.waitForSignIn();
     }
-    mount(h('div.page', {}, [h('main.content.center', {}, [h('div.spinner'), h('p.sub', { text: 'Loading…' })])]));
-    try {
-      const data = await Api.call('bootstrap');
-      state.user = data.user;
-      state.ref = data.ref;
-      state.limits = data.limits;
-      state.views = data.views;
-      state.refreshedAt = new Date();
+    let started = false;
+    function begin() {
+      if (started) return;
+      started = true;
       window.addEventListener('hashchange', function () {
         if (roleChanged && onHome()) { location.reload(); return; }
         route();
@@ -2390,11 +2387,75 @@
       });
       startAutoRefresh();
       route();
+    }
+    // The screen from last time (this person, this device) shows at once; fresh data follows.
+    const saved = loadStartData(Api.currentEmail());
+    if (saved) {
+      applyStartData(saved.data);
+      state.refreshedAt = new Date(saved.savedAt);
+      begin();
+    } else {
+      mount(h('div.page', {}, [h('main.content.center', {}, [h('div.spinner'), h('p.sub', { text: 'Loading…' })])]));
+    }
+    try {
+      const data = await Api.call('bootstrap');
+      const was = state.user;
+      applyStartData(data);
+      state.refreshedAt = new Date();
+      saveStartData();
+      if (!started) { begin(); return; }
+      // Already showing last time's screen: bring it up to date without touching a form being filled in.
+      const changedAccess = !was || was.role !== data.user.role || was.outletCode !== data.user.outletCode || (was.petty || '') !== (data.user.petty || '');
+      if (changedAccess) { homeTab = null; route(); return; }
+      if (onHome() && !userIsTyping()) renderHome(true);
     } catch (err) {
-      renderFatal(err);
+      if (!started || /^AUTH_/.test(err.code || '')) { forgetStartData(); renderFatal(err); return; }
+      toast(err.code === 'NETWORK' ? 'No connection — showing what was saved at ' + state.refreshedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : err.message);
     }
   }
 
+  // --------------------------------------------------------- start data
+  // What bootstrap returned last time, kept in this browser for the same Google
+  // account only (never shown to anyone signed in as someone else), for 7 days.
+  const START_KEY = 'pw_start_v1';
+  function applyStartData(data) {
+    state.user = data.user;
+    state.ref = data.ref;
+    state.limits = data.limits;
+    state.views = data.views;
+  }
+  function saveStartData() {
+    try {
+      if (!state.user || !state.user.email) return;
+      const views = Object.assign({}, state.views);
+      delete views.all;   // the full chain list is loaded when that tab is opened
+      localStorage.setItem(START_KEY, JSON.stringify({
+        email: String(state.user.email).toLowerCase(), savedAt: Date.now(),
+        data: { user: state.user, ref: state.ref, limits: state.limits, views: views },
+      }));
+    } catch (err) { /* private mode or full: start normally next time */ }
+  }
+  function loadStartData(email) {
+    try {
+      const s = JSON.parse(localStorage.getItem(START_KEY) || 'null');
+      if (!s || !email || s.email !== email || Date.now() - s.savedAt > 7 * 86400000) return null;
+      return s;
+    } catch (err) { return null; }
+  }
+  function forgetStartData() {
+    try { localStorage.removeItem(START_KEY); } catch (err) { /* nothing saved */ }
+  }
+
   ['dragover', 'drop'].forEach(function (t) { window.addEventListener(t, function (ev) { ev.preventDefault(); }); });
-  window.addEventListener('load', start);
+  // Start as soon as the page and Google's sign-in script are there (not after every font has loaded).
+  function whenGoogleReady(fn) {
+    const t0 = Date.now();
+    (function wait() {
+      if (window.google && google.accounts && google.accounts.id) return fn();
+      if (Date.now() - t0 > 10000) return fn();   // start() then says sign-in could not load
+      setTimeout(wait, 50);
+    })();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { whenGoogleReady(start); });
+  else whenGoogleReady(start);
 })();

@@ -15,13 +15,18 @@ window.Api = (function () {
   let waiters = [];
   let overlayEl = null;
 
-  function decodeExp(jwt) {
+  function claims(jwt) {
     try {
-      const payload = JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-      return Number(payload.exp) || 0;
+      return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
     } catch (err) {
-      return 0;
+      return {};
     }
+  }
+  function decodeExp(jwt) { return Number(claims(jwt).exp) || 0; }
+
+  /** The signed-in Google address (from the token Google gave this tab), or ''. */
+  function currentEmail() {
+    return token ? String(claims(token).email || '').toLowerCase() : '';
   }
 
   function storeToken(jwt) {
@@ -163,5 +168,5 @@ window.Api = (function () {
     return body.data;
   }
 
-  return { init: init, renderButton: renderButton, waitForSignIn: waitForSignIn, call: call, signOut: signOut, hasToken: tokenValid };
+  return { init: init, renderButton: renderButton, waitForSignIn: waitForSignIn, call: call, signOut: signOut, hasToken: tokenValid, currentEmail: currentEmail };
 })();
