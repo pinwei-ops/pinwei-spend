@@ -43,6 +43,8 @@
   }
 
   function toast(message, kind) {
+    // One message at a time: a new one replaces the one on screen.
+    document.querySelectorAll('.toast').forEach(function (old) { old.remove(); });
     const el = h('div.toast' + (kind ? '.' + kind : ''), { role: 'status', text: message });
     document.body.appendChild(el);
     setTimeout(function () { el.classList.add('show'); }, 10);
@@ -1018,19 +1020,28 @@
       if (decision !== 'APPROVE' && !reason) { err.textContent = 'Please write a reason.'; err.hidden = false; reasonBox.focus(); return; }
       busy = true;
       setDisabled(true);
-      try {
-        const res = await Api.call('decide', { id: e.expense_id, decision: decision, reason: reason, seen_updated_at: e.updated_at });
-        removeFrom('to_approve', e.expense_id);
-        if (res.expense.submitted_by === state.user.userId) upsert('mine', res.expense);
-        toast({ APPROVE: 'Approved ', REJECT: 'Rejected ', REQUEST_INFO: 'Sent back for info: ' }[decision] + e.expense_id, 'ok');
-        go('/');
-      } catch (ex) {
-        err.textContent = ex.message;
-        err.hidden = false;
-        setDisabled(false);
-      } finally {
-        busy = false;
-      }
+      // Back to the list at once; the decision is saved in the background (a few seconds).
+      // If saving fails, the item comes back to the list and a message says why.
+      const item = (state.views.to_approve || []).find(function (x) { return x.expense_id === e.expense_id; });
+      removeFrom('to_approve', e.expense_id);
+      savingIds[e.expense_id] = true;
+      state.detail = null;
+      toast({ APPROVE: 'Approving ', REJECT: 'Rejecting ', REQUEST_INFO: 'Sending back for info: ' }[decision] + e.expense_id + '…');
+      go('/');
+      Api.call('decide', { id: e.expense_id, decision: decision, reason: reason, seen_updated_at: e.updated_at })
+        .then(function (res) {
+          if (res.expense.submitted_by === state.user.userId) upsert('mine', res.expense);
+          toast({ APPROVE: 'Approved ', REJECT: 'Rejected ', REQUEST_INFO: 'Sent back for info: ' }[decision] + e.expense_id, 'ok');
+        })
+        .catch(function (ex) {
+          if (item) upsert('to_approve', item);
+          toast('Not saved — ' + e.expense_id + ': ' + ex.message);
+        })
+        .finally(function () {
+          delete savingIds[e.expense_id];
+          busy = false;
+          if (onHome()) renderHome(true);
+        });
     }
 
     function showMain() {
@@ -2053,6 +2064,11 @@
   }
 
   let roleChanged = false;
+  // Decisions still being saved in the background: kept out of the "to approve" list meanwhile.
+  const savingIds = {};
+  window.addEventListener('beforeunload', function (ev) {
+    if (Object.keys(savingIds).length) { ev.preventDefault(); ev.returnValue = ''; }
+  });
   async function refreshViews(manual) {
     if (refreshing || !state.user) return;
     if (!manual && state.refreshedAt && Date.now() - state.refreshedAt.getTime() < MIN_GAP_MS) return;
@@ -2068,6 +2084,7 @@
       const hadAll = Boolean(state.views.all);
       state.views = data.views;
       if (data.sendTo) state.ref.sendTo = data.sendTo;
+      Object.keys(savingIds).forEach(function (id) { removeFrom('to_approve', id); });
       if (state.cash && state.user.petty) state.cash = await Api.call('pettyCash');
       if (hadAll) state.views.all = (await Api.call('listExpenses', { view: 'all' })).expenses;
       state.user.telegramLinked = data.telegramLinked;

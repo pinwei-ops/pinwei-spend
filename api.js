@@ -118,10 +118,13 @@ window.Api = (function () {
     const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 90000) : null;
     let res;
     try {
+      const body = JSON.stringify({ action: action, idToken: idToken, payload: payload || {} });
       res = await fetch(cfg.API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: action, idToken: idToken, payload: payload || {} }),
+        body: body,
+        // Small requests (decisions, not photo uploads) still reach the server if the tab is closed right away.
+        keepalive: body.length < 60000,
         signal: ctrl ? ctrl.signal : undefined,
       });
     } catch (err) {
