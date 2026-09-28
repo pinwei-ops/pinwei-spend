@@ -126,7 +126,7 @@ window.Api = (function () {
     const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 90000) : null;
     let res;
     try {
-      const body = JSON.stringify({ action: action, idToken: idToken, payload: payload || {} });
+      const body = JSON.stringify({ action: action, idToken: idToken, payload: payload || {}, perf: debug || undefined });
       res = await fetch(cfg.API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -159,8 +159,13 @@ window.Api = (function () {
   const debug = /[?&]debug=1/.test(location.search) || (function () { try { return sessionStorage.getItem('pw_debug') === '1'; } catch (e) { return false; } })();
   if (debug) { try { sessionStorage.setItem('pw_debug', '1'); } catch (e) { /* ok */ } }
   let debugBox = null;
-  function logTiming(action, totalMs, serverMs) {
-    const line = action + ': ' + (totalMs / 1000).toFixed(1) + ' s' + (serverMs ? ' (server ' + (serverMs / 1000).toFixed(1) + ' s)' : '');
+  function logTiming(action, totalMs, serverMs, perf) {
+    // perf: {"sheet.read": "1234/3", ...} from the server — its biggest parts are shown.
+    const parts = Object.keys(perf || {}).map(function (k) { const v = String(perf[k]).split('/'); return { k: k, ms: Number(v[0]) || 0, n: v[1] || '' }; })
+      .filter(function (x) { return x.ms >= 100 && x.k !== 'action'; }).sort(function (a, b) { return b.ms - a.ms; }).slice(0, 4)
+      .map(function (x) { return x.k + ' ' + (x.ms / 1000).toFixed(1) + (x.n ? '×' + x.n : ''); });
+    const line = action + ': ' + (totalMs / 1000).toFixed(1) + ' s' + (serverMs ? ' (server ' + (serverMs / 1000).toFixed(1) + ' s)' : '') +
+      (parts.length ? '\n   ' + parts.join(' · ') : '');
     if (window.console) console.info('[timing] ' + line);
     if (!debug) return;
     if (!debugBox) {
@@ -168,7 +173,7 @@ window.Api = (function () {
       debugBox.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99;max-width:70vw;padding:6px 8px;border-radius:8px;background:rgba(0,0,0,.75);color:#fff;font:12px/1.4 monospace;pointer-events:none;white-space:pre';
       document.body.appendChild(debugBox);
     }
-    debugBox.textContent = (line + '\n' + debugBox.textContent).split('\n').slice(0, 6).join('\n');
+    debugBox.textContent = (line + '\n' + debugBox.textContent).split('\n').slice(0, 12).join('\n');
   }
 
   async function call(action, payload) {
@@ -176,7 +181,7 @@ window.Api = (function () {
     const tok = await getToken();
     const tSend = Date.now();
     let body = await post(action, tok, payload);
-    logTiming(action + (tSend - t0 > 300 ? ' [sign-in ' + ((tSend - t0) / 1000).toFixed(1) + ' s]' : ''), Date.now() - t0, body && body.ms);
+    logTiming(action + (tSend - t0 > 300 ? ' [sign-in ' + ((tSend - t0) / 1000).toFixed(1) + ' s]' : ''), Date.now() - t0, body && body.ms, body && body.perf);
     if (!body.ok && /^AUTH_(INVALID_TOKEN|EXPIRED|MISSING_TOKEN)$/.test(body.error)) {
       token = null;
       body = await post(action, await getToken('Your sign-in expired. Sign in to continue — your form is kept.'), payload);
