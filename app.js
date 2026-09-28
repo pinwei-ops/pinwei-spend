@@ -737,11 +737,12 @@
         preview.appendChild(h('div.preview-row', {}, [
           a.mime.indexOf('image/') === 0 ? h('img.thumb', { src: 'data:' + a.mime + ';base64,' + a.base64, alt: 'Receipt' }) : h('span.pdf', { text: 'PDF' }),
           h('div.preview-info', {}, [h('span', { text: f.name })]),
-          h('button.link', { type: 'button', text: 'Remove', onclick: function () { pickSeq++; attachment = null; preview.textContent = ''; noDoc.hidden = false; } }),
+          h('button.link', { type: 'button', text: 'Remove', onclick: function () { pickSeq++; attachment = null; preview.textContent = ''; noDoc.hidden = false; touch('file'); } }),
         ]));
         noDoc.hidden = true;
+        validate();
       }).catch(function (err) { if (mine === pickSeq) { attachment = null; preview.textContent = err.message; } })
-        .finally(function () { if (preparing === job) preparing = null; });
+        .finally(function () { if (preparing === job) preparing = null; validate(); });
       preparing = job;
     }
     fileInput.addEventListener('change', function () {
@@ -758,12 +759,18 @@
       .concat(state.ref.enums.filter(function (x) { return x.field === 'no_doc_reason' && x.value !== 'PURCHASE_NOT_ORDERED'; }).map(function (x) { return h('option', { value: x.value, text: x.label }); })));
     const reasonNote = h('input.input', { maxlength: 300, placeholder: 'Reason (optional), e.g. street vendor' });
     reasonNote.hidden = true;
-    reasonSel.addEventListener('change', function () { reasonNote.hidden = reasonSel.value !== 'OTHER'; });
+    reasonSel.addEventListener('change', function () { reasonNote.hidden = reasonSel.value !== 'OTHER'; touch('file'); });
     const noDoc = fieldBox('no_doc_reason', 'No receipt? Choose why', h('div.stack', {}, [reasonSel, reasonNote]));
 
     let body = [];
     let payloadOf;
     let action;
+    // Required fields: [name, short name, message, filled?]. A red * on each; the message shows
+    // once the field was touched and left empty; Save waits until all are filled.
+    let rules = [];
+    const touchedC = {};
+    let ready = false;
+    function touch(name) { touchedC[name] = true; validate(); }
     if (kind === 'spend') {
       let category = '';
       const catGrid = h('div.cat-grid', { role: 'radiogroup', 'aria-label': 'Category' });
@@ -772,12 +779,21 @@
         const r = function (x) { const i = CATEGORY_ORDER.indexOf(x.value); return i === -1 ? 99 : i; };
         return r(a) - r(b);
       }).forEach(function (c) {
-        catGrid.appendChild(h('button.chip-btn', { type: 'button', role: 'radio', 'data-value': c.value, text: categoryShort(c.value), title: c.label, onclick: function () { category = c.value; paintCats(); } }));
+        catGrid.appendChild(h('button.chip-btn', { type: 'button', role: 'radio', 'data-value': c.value, text: categoryShort(c.value), title: c.label, onclick: function () { category = c.value; paintCats(); touch('expense_category'); } }));
       });
       paintCats();
       const outlet = h('select.input', {}, [h('option', { value: '', text: 'Choose the outlet' })]
         .concat(state.ref.outlets.map(function (o) { return h('option', { value: o.value, text: o.label }); })));
       note.placeholder = 'What was bought, and why in cash?';
+      outlet.addEventListener('change', function () { touch('outlet_code'); });
+      rules = [
+        ['amount', 'Amount', 'Enter the amount. This field is required.', function () { return amount.value() > 0; }],
+        ['file', 'Photo or reason', 'Attach a photo of the receipt, or choose why there is none.', function () { return Boolean(attachment || reasonSel.value); }],
+        ['outlet_code', 'Outlet', 'Choose the outlet. This field is required.', function () { return Boolean(outlet.value); }],
+        ['expense_category', 'Category', 'Choose a category. This field is required.', function () { return Boolean(category); }],
+        ['description', 'What for', 'Write what it was for. This field is required.', function () { return Boolean(note.value.trim()); }],
+        ['entry_date', 'Date', 'Choose the date. This field is required.', function () { return Boolean(date.value); }],
+      ];
       body = [
         fieldBox('amount', 'Amount', amount.el),
         fieldBox('file', 'Photo of the receipt', h('div', {}, [fileInput, preview, dropzone])),
@@ -794,6 +810,10 @@
       };
     } else if (kind === 'deposit') {
       note.placeholder = 'e.g. Cheque no. 123, signed by Eddy';
+      rules = [
+        ['amount', 'Amount', 'Enter the amount. This field is required.', function () { return amount.value() > 0; }],
+        ['entry_date', 'Date', 'Choose the date. This field is required.', function () { return Boolean(date.value); }],
+      ];
       body = [
         h('p.hint', { text: 'Record the cash you are handing to the cash keeper. It is added to the balance when she confirms how much she received.' }),
         fieldBox('amount', 'Amount', amount.el),
@@ -812,6 +832,9 @@
         diff.textContent = !amount.input.value ? '' : d === 0 ? 'Matches the records.' : (d < 0 ? 'Short by ' : 'Over by ') + fmtMoney(Math.abs(d)) + ' — the owners will be told.';
       };
       note.placeholder = 'Optional note';
+      rules = [
+        ['counted', 'Cash counted', 'Enter the cash you counted (0 if the box is empty).', function () { return amount.input.value !== ''; }],
+      ];
       body = [
         h('p.hint', { text: 'Count all the cash in the box and enter the total. ' + (expected === null ? '' : 'The records say ' + fmtMoney(expected) + '. ') + 'Any difference is recorded and the balance then matches your count.' }),
         fieldBox('counted', 'Cash counted', h('div', {}, [amount.el, diff])),
@@ -822,7 +845,33 @@
     }
 
     const submit = h('button.btn.btn-primary.btn-big', { type: 'button', text: kind === 'count' ? 'Save the count' : 'Save' });
+    const missingLine = h('p.hint.missing-line', { hidden: true, 'aria-live': 'polite' });
+    let saving = false;
+    rules.forEach(function (r) {
+      const lbl = errs[r[0]] && errs[r[0]].parentNode && errs[r[0]].parentNode.querySelector('.label');
+      if (lbl) lbl.appendChild(h('span.req-star', { text: ' *', 'aria-hidden': 'true' }));
+    });
+    amount.input.addEventListener('input', function () { touch(kind === 'count' ? 'counted' : 'amount'); });
+    note.addEventListener('input', function () { if (touchedC.description || note.value) touch('description'); });
+    date.addEventListener('change', function () { touch('entry_date'); });
+    function validate(showAll) {
+      if (!ready) return [];
+      const missing = [];
+      rules.forEach(function (r) {
+        const p = errs[r[0]];
+        if (r[3]()) { if (p && p.dataset.required) { p.hidden = true; delete p.dataset.required; } return; }
+        missing.push(r[1]);
+        if (showAll) touchedC[r[0]] = true;
+        if (p && touchedC[r[0]]) { p.textContent = r[2]; p.hidden = false; p.dataset.required = '1'; }
+      });
+      if (!saving) submit.disabled = missing.length > 0;
+      missingLine.textContent = missing.length ? 'Still needed: ' + missing.join(', ') : '';
+      missingLine.hidden = !missing.length;
+      return missing;
+    }
     submit.addEventListener('click', async function () {
+      if (validate(true).length) return;
+      saving = true;
       submit.disabled = true;
       summary.hidden = true;
       try {
@@ -840,11 +889,15 @@
         if (err.code === 'VALIDATION' && err.details && err.details.length) showProblems(err.details);
         else toast(err.message);
       } finally {
-        submit.disabled = false;
+        saving = false;
         submit.textContent = kind === 'count' ? 'Save the count' : 'Save';
+        submit.disabled = false;
+        validate();
       }
     });
-    mount(page([back, h('h1.title', { text: titles[kind] }), summary, h('section.form-section', {}, body.concat([errs._form])), submit]));
+    ready = true;
+    validate();
+    mount(page([back, h('h1.title', { text: titles[kind] }), summary, h('section.form-section', {}, body.concat([errs._form])), missingLine, submit]));
   }
 
   /** #/cash/<id>: one entry, its photo, and "cancel this entry". */
@@ -1624,7 +1677,86 @@
     const fieldEls = {};        // field -> wrapper, for error display
     const summary = h('p.submit-summary', { hidden: true, 'aria-live': 'polite' });
 
-    function set(field, value) { values[field] = value; if (!editing) saveDraft(values); clearError(field); paintSummary(); }
+    function set(field, value) {
+      values[field] = value;
+      touched[field === 'no_doc_reason' ? 'file' : field] = true;
+      if (!editing) saveDraft(values);
+      clearError(field);
+      paintSummary();
+      checkRequired();
+    }
+
+    // --- required fields: a red * on each one that is needed right now; "required" appears
+    // under a field only after someone touched it and left it empty; Submit waits for all of them.
+    const touched = {};
+    const shownRequired = {};
+    let formReady = false;
+    const REQUIRED = {
+      file: ['Photo or reason', 'Attach a photo, or choose why there is no document.'],
+      amount_total: ['Amount', 'Enter the amount. This field is required.'],
+      expense_category: ['Category', 'Choose a category. This field is required.'],
+      description: ['Description', 'Write what it was for. Required when the category is "Other".'],
+      payee_type: ['Who gets paid', 'Choose who gets paid. This field is required.'],
+      supplier_id: ['Supplier', 'Choose the supplier, or add a new one.'],
+      new_supplier_name: ['Supplier name', 'Enter the new supplier\u2019s name.'],
+      payee_name: ['Their name', 'Enter their name.'],
+      payee_account: ['Their account number', 'Enter their account number.'],
+      send_to: ['Send to', 'Choose who to send this to.'],
+    };
+    function requiredNow() {
+      const v = values;
+      const filled = function (x) { return Boolean(String(x === undefined || x === null ? '' : x).trim()); };
+      return [
+        ['file', true, Boolean(attachment || keptAttachment || v.no_doc_reason)],
+        ['amount_total', true, Number(v.amount_total) > 0],
+        ['expense_category', true, filled(v.expense_category)],
+        ['description', v.expense_category === 'OTHER', filled(v.description)],
+        ['payee_type', true, filled(v.payee_type)],
+        ['supplier_id', v.payee_type === 'SUPPLIER', filled(v.supplier_id)],
+        ['new_supplier_name', v.payee_type === 'SUPPLIER' && v.supplier_id === NEW_SUPPLIER, filled(v.new_supplier_name)],
+        ['payee_name', v.payee_type === 'OTHER', filled(v.payee_name)],
+        ['payee_account', v.payee_type === 'OTHER', filled(v.payee_account)],
+        ['send_to', !editing, filled(v.send_to)],
+      ];
+    }
+    /** Where the red * goes: the field's label, or the section title for fields without one. */
+    function starTarget(name) {
+      if (name === 'payee_type') return payeeTitle;
+      if (name === 'send_to') return sendTitle;
+      const w = fieldEls[name];
+      return w && w.querySelector('.label');
+    }
+    function markRequired(name, on) {
+      const t = starTarget(name);
+      if (!t) return;
+      const star = t.querySelector('.req-star');
+      if (on && !star) t.appendChild(h('span.req-star', { text: ' *', 'aria-hidden': 'true' }));
+      if (!on && star) star.remove();
+      const w = fieldEls[name];
+      const c = w && w.querySelector('#f_' + name);
+      if (c) { if (on) c.setAttribute('aria-required', 'true'); else c.removeAttribute('aria-required'); }
+    }
+    function checkRequired(showAll) {
+      if (!formReady) return [];
+      const missing = [];
+      requiredNow().forEach(function (r) {
+        const name = r[0];
+        const needed = r[1];
+        const ok = r[2];
+        markRequired(name, needed);
+        if (!needed || ok) {
+          if (shownRequired[name]) { clearError(name); shownRequired[name] = false; }
+          return;
+        }
+        missing.push(REQUIRED[name][0]);
+        if (showAll) touched[name] = true;
+        if (touched[name]) { showError(name, REQUIRED[name][1]); shownRequired[name] = true; }
+      });
+      if (!submitting) submitBtn.disabled = missing.length > 0;
+      missingLine.textContent = missing.length ? 'Still needed: ' + missing.join(', ') : '';
+      missingLine.hidden = !missing.length;
+      return missing;
+    }
 
     /** One line above Submit: what is about to be sent, so nothing needs scrolling back up. */
     function paintSummary() {
@@ -1717,9 +1849,9 @@
     }
 
     /** A section card with a step number, so the form reads as four short steps. */
-    function section(num, title, children) {
+    function section(num, title, children, titleEl) {
       return h('section.form-section', {}, [
-        h('h2.form-step', {}, [h('span.step-num', { text: String(num), 'aria-hidden': 'true' }), h('span', { text: title })]),
+        h('h2.form-step', {}, [h('span.step-num', { text: String(num), 'aria-hidden': 'true' }), titleEl || h('span', { text: title })]),
       ].concat(children));
     }
 
@@ -1792,7 +1924,7 @@
         preview.appendChild(h('div.preview-row', {}, [
           isImg ? h('img.thumb', { src: 'data:' + keptAttachment.mime + ';base64,' + keptAttachment.base64, alt: 'Current document' }) : h('span.pdf', { text: 'PDF' }),
           h('div.preview-info', {}, [h('span', { text: 'Current document' }), h('span.hint', { text: 'Take a new photo to replace it' })]),
-          h('button.link', { type: 'button', text: 'Remove', onclick: function () { keptAttachment = null; removedAttachment = true; paintAttachment(); } }),
+          h('button.link', { type: 'button', text: 'Remove', onclick: function () { keptAttachment = null; removedAttachment = true; touched.file = true; paintAttachment(); } }),
         ]));
       }
       if (attachment) {
@@ -1803,7 +1935,7 @@
             h('span', { text: attachment.name }),
             h('span.hint', { text: Math.round(attachment.sizeAfter / 1024) + ' KB' + (isImg ? ' (from ' + Math.round(attachment.sizeBefore / 1024) + ' KB)' : '') }),
           ]),
-          h('button.link', { type: 'button', text: 'Remove', onclick: function () { attachment = null; fileInput.value = ''; paintAttachment(); } }),
+          h('button.link', { type: 'button', text: 'Remove', onclick: function () { attachment = null; fileInput.value = ''; touched.file = true; paintAttachment(); } }),
         ]));
       }
       const hasDoc = Boolean(attachment || keptAttachment);
@@ -1812,6 +1944,7 @@
       noDocField.hidden = hasDoc || status === 'working' || !noDocOpen;
       noDocNoteField.hidden = noDocField.hidden || values.no_doc_reason !== 'OTHER';
       noDocToggle.hidden = hasDoc || status === 'working' || noDocOpen;
+      checkRequired();
     }
 
     function pickFile(file) {
@@ -1947,6 +2080,7 @@
     function paintPayee() {
       const t = values.payee_type;
       supplierField.querySelector('.label').textContent = t === 'SUPPLIER' ? 'Supplier' : 'Bought from (optional)';
+      checkRequired();
       supplierField.hidden = !t;
       otherFields.hidden = t !== 'OTHER';
       payeeHint.textContent = t === 'SUBMITTER'
@@ -1970,7 +2104,7 @@
     // --- description
     const desc = h('textarea.input', { rows: 2, placeholder: 'What was bought, and for what?', oninput: function () { set('description', desc.value); } });
     desc.value = values.description || '';
-    const descField = field('description', 'Description', desc, 'Required when the category or reason is "Other".');
+    const descField = field('description', 'Description', desc, 'Required when the category is "Other".');
 
     // --- more details
     const outletField = state.ref.outlets.length > 1
@@ -2003,6 +2137,12 @@
 
     async function submit(confirmWarnings) {
       if (submitting) return;
+      if (checkRequired(true).length) {
+        const first = requiredNow().find(function (r) { return r[1] && !r[2]; });
+        const w = first && (fieldEls[first[0]] || starTarget(first[0]));
+        if (w && w.scrollIntoView) w.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
       submitting = true;
       warnBox.hidden = true;
       stickyBar.hidden = false;
@@ -2046,8 +2186,9 @@
         }
       } finally {
         submitting = false;
-        submitBtn.disabled = false;
         submitBtn.textContent = 'Submit';
+        submitBtn.disabled = false;
+        checkRequired();
       }
     }
 
@@ -2064,7 +2205,10 @@
       warnBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 
-    const stickyBar = h('div.sticky-submit', {}, [summary, submitBtn]);
+    const missingLine = h('p.hint.missing-line', { hidden: true, 'aria-live': 'polite' });
+    const stickyBar = h('div.sticky-submit', {}, [summary, missingLine, submitBtn]);
+    const payeeTitle = h('span', { text: 'Who gets paid?' });
+    const sendTitle = h('span', { text: editing ? 'Who reviews it' : 'Send to' });
     const form = h('form.form', { novalidate: true, onsubmit: function (ev) { ev.preventDefault(); submit(false); } }, [
       h('a.back', { href: editing ? '#/expense/' + encodeURIComponent(existing.expense_id) : '#/', text: editing ? 'Cancel' : 'Back' }),
       h('h1.title', {}, editing
@@ -2078,14 +2222,16 @@
       editing && existing.info_request ? h('div.item-note', { text: 'Requested: ' + existing.info_request }) : null,
       section(1, 'What is it?', [typeField, fileField, noDocToggle, noDocField, noDocNoteField]),
       section(2, 'How much?', [amountField, catField, descField]),
-      section(3, 'Who gets paid?', [payeeBlock]),
-      section(4, editing ? 'Who reviews it' : 'Send to', [sendField]),
+      section(3, 'Who gets paid?', [payeeBlock], payeeTitle),
+      section(4, editing ? 'Who reviews it' : 'Send to', [sendField], sendTitle),
       more,
       formErrors, warnBox,
       stickyBar,
     ]);
+    formReady = true;
     paintAttachment();
     paintSummary();
+    checkRequired();
     mount(page([form]));
   }
 
