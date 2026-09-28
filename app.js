@@ -244,9 +244,48 @@
     opts = opts || {};
     if (!items.length && !opts.showEmpty) return null;
     const head = h('h2.section-title', {}, [title, items.length ? h('span.count', { text: String(items.length) }) : null]);
-    const list = items.length ? h('div.list', {}, items.map(function (e) { return expenseCard(e, opts.showSubmitter); })) : h('p.empty', { text: opts.empty });
+    const list = items.length ? h('div.list', {}, sortItems(items).map(function (e) { return expenseCard(e, opts.showSubmitter); })) : h('p.empty', { text: opts.empty });
     if (opts.collapsed) return h('details.section', { open: doneOpen, ontoggle: function (ev) { doneOpen = ev.currentTarget.open; } }, [h('summary', {}, [head]), list]);
     return h('section.section', {}, [head, list]);
+  }
+
+  // Order of every list. Newest first unless the viewer picks another order (remembered on this device).
+  const SORTS = [
+    ['new', 'Newest first'], ['old', 'Oldest first'],
+    ['amount_desc', 'Amount: high to low'], ['amount_asc', 'Amount: low to high'],
+    ['due', 'Due date: soonest first'],
+  ];
+  let sortBy = 'new';
+  try { sortBy = localStorage.getItem('pw_sort') || 'new'; } catch (err) { /* private mode */ }
+  if (!SORTS.some(function (s) { return s[0] === sortBy; })) sortBy = 'new';
+
+  function sortItems(list) {
+    const time = function (e) { return new Date(e.created_at).getTime() || 0; };
+    const amount = function (e) { return Number(e.status === 'PARTIAL' ? e.balance_due : e.amount_total) || 0; };
+    const due = function (e) { return e.due_date ? new Date(e.due_date).getTime() : Infinity; };
+    const by = {
+      new: function (a, b) { return time(b) - time(a); },
+      old: function (a, b) { return time(a) - time(b); },
+      amount_desc: function (a, b) { return amount(b) - amount(a) || time(b) - time(a); },
+      amount_asc: function (a, b) { return amount(a) - amount(b) || time(b) - time(a); },
+      due: function (a, b) { return (due(a) - due(b)) || time(a) - time(b); },
+    }[sortBy];
+    return list.slice().sort(by);
+  }
+
+  function sortControl() {
+    const sel = h('select.input', { 'aria-label': 'Sort', onchange: function () {
+      sortBy = sel.value;
+      try { localStorage.setItem('pw_sort', sortBy); } catch (err) { /* private mode */ }
+      renderHome(true);
+    } }, SORTS.map(function (s) { return h('option', { value: s[0], text: s[1] }); }));
+    sel.value = sortBy;
+    return h('label.show-filter', {}, [h('span.show-label', { text: 'Sort' }), sel]);
+  }
+
+  /** "Show" and "Sort" side by side (stacked on a phone). */
+  function listControls(show) {
+    return h('div.list-controls', {}, [show, sortControl()]);
   }
 
   /** A "Show: …" dropdown above a list. options: [[value, label], …] */
@@ -379,6 +418,7 @@
           { value: fmtShort(sum(qa, 'amount_total')), label: 'Total' },
           { value: (state.views.to_check || []).length, label: 'Cash checks' },
         ]),
+        qa.length > 1 ? listControls(null) : null,
         section('Waiting for your decision', state.views.to_approve, { showEmpty: true, empty: 'Nothing waiting for you.', showSubmitter: true }),
         section('Cash payments to post-check', state.views.to_check || [], { showSubmitter: true }),
       ];
@@ -409,13 +449,13 @@
           { value: overdueN, label: 'Overdue', alert: overdueN > 0 },
           { value: partialN, label: 'Partially paid' },
         ]),
-        showFilter(payShow, [
+        listControls(showFilter(payShow, [
           ['', 'Everything to pay (' + q.length + ')'],
           ['APPROVED', 'Approved, nothing paid yet (' + (q.length - partialN) + ')'],
           ['PARTIAL', 'Partially paid (' + partialN + ')'],
           ['OVERDUE', 'Overdue (' + overdueN + ')'],
           ['PAID', 'Paid in the last 30 days'],
-        ], function (v) { payShow = v; }),
+        ], function (v) { payShow = v; })),
         listPart,
         q.length && payShow !== 'PAID' ? h('button.btn', { type: 'button', text: 'Export list for bank transfers (CSV)', onclick: exportToPay }) : null,
         monthExportRow(),
@@ -438,9 +478,9 @@
         CANCELLED: ['Cancelled', ['CANCELLED']],
       };
       if (mine.length) {
-        body.push(showFilter(mineShow, [['', 'Everything (' + mine.length + ')']].concat(Object.keys(MINE_SHOW).map(function (k) {
+        body.push(listControls(showFilter(mineShow, [['', 'Everything (' + mine.length + ')']].concat(Object.keys(MINE_SHOW).map(function (k) {
           return [k, MINE_SHOW[k][0] + ' (' + byStatus(MINE_SHOW[k][1]).length + ')'];
-        })), function (v) { mineShow = v; }));
+        })), function (v) { mineShow = v; })));
       }
       if (MINE_SHOW[mineShow]) {
         body.push(section(MINE_SHOW[mineShow][0], byStatus(MINE_SHOW[mineShow][1]), { showEmpty: true, empty: 'Nothing here.' }));
@@ -484,15 +524,17 @@
     const search = h('input.input', { type: 'search', placeholder: 'Search ID, supplier, person…', value: allFilter.q });
     search.addEventListener('change', function () { allFilter.q = search.value; renderHome(true); });
 
-    // Timeline: grouped by submission day, newest first.
+    // Timeline: grouped by submission day when sorted by date; one list otherwise.
     const groups = [];
-    rows.forEach(function (e) {
-      const day = fmtDate(e.created_at);
+    const byDate = sortBy === 'new' || sortBy === 'old';
+    sortItems(rows).forEach(function (e) {
+      const day = byDate ? fmtDate(e.created_at) : (SORTS.find(function (s) { return s[0] === sortBy; }) || [])[1];
       const last = groups[groups.length - 1];
       if (last && last.day === day) last.items.push(e); else groups.push({ day: day, items: [e] });
     });
     return [
       h('div.filters', {}, [h('div.grid2', {}, [outletSel, statusSel]), search]),
+      rows.length > 1 ? listControls(null) : null,
       EXPORT_MONTH_ROLES.indexOf(state.user.role) !== -1 && state.user.role !== 'ACCOUNTANT' ? monthExportRow() : null,
       stats([
         { value: rows.length, label: 'Shown', brand: true },

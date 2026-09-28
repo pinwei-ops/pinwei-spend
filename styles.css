@@ -269,6 +269,9 @@ details.more-inline[open] > .input { margin-top: 6px; }
 .cash-balance { margin-bottom: 12px; }
 .cash-balance-value { font-size: 2rem; font-weight: 700; line-height: 1.2; margin-top: 4px; }
 .cash-balance.low .cash-balance-value { color: var(--bad); }
+.list-controls { display: flex; flex-wrap: wrap; gap: 0 16px; }
+.list-controls > .show-filter { flex: 1 1 260px; }
+@media (min-width: 1000px) { .list-controls > .show-filter { flex: 0 1 360px; } .list-controls > .show-filter .input { flex: 1; } }
 .show-filter { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
 .show-filter .show-label { flex: 0 0 auto; font-weight: 600; color: var(--muted); }
 .show-filter .input { flex: 1; min-width: 0; }
