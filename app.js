@@ -995,8 +995,8 @@
     return new Blob([bytes], { type: mime });
   }
 
-  function attachmentView(att) {
-    if (att && att.pending) return h('div.doc-missing.doc-loading', { 'data-slot': 'attachment' }, [h('div.spinner'), h('span', { text: 'Loading photo…' })]);
+  function attachmentView(att, slot) {
+    if (att && att.pending) return h('div.doc-missing.doc-loading', { 'data-slot': slot || 'attachment' }, [h('div.spinner'), h('span', { text: 'Loading photo…' })]);
     if (!att) return h('div.doc-missing', { text: 'No document attached' });
     if (att.error) return h('div.doc-missing', { text: att.error });
     const url = URL.createObjectURL(base64ToBlob(att.base64, att.mime));
@@ -1077,6 +1077,12 @@
   /** Puts the photos into their placeholders once they arrive (the rest of the page is left alone). */
   function fillFiles(e, files) {
     e.attachment = e.attachment ? (files.attachment || null) : null;
+    (e.extra_files || []).forEach(function (f, i) {
+      const got = (files.extra_files || [])[i] || null;
+      e.extra_files[i] = got;
+      const ph = document.querySelector('[data-slot="extra-' + i + '"]');
+      if (ph) ph.replaceWith(attachmentView(got || { error: 'This file could not be loaded.' }));
+    });
     (e.payments || []).forEach(function (p) { if (p.proof) p.proof = (files.proofs || {})[p.payment_id] || null; });
     const slot = document.querySelector('[data-slot="attachment"]');
     if (slot) slot.replaceWith(attachmentView(files.attachment || null));
@@ -1113,6 +1119,7 @@
     }
     if (filesCache[id]) {
       e.attachment = e.attachment ? filesCache[id].attachment : null;
+      e.extra_files = (e.extra_files || []).map(function (f, i) { return (filesCache[id].extra_files || [])[i] || null; });
       (e.payments || []).forEach(function (p) { if (p.proof) p.proof = filesCache[id].proofs[p.payment_id] || null; });
     } else {
       filesPromise.then(function (files) {
@@ -1135,7 +1142,8 @@
       h('div.detail-grid', {}, [
       h('div.detail-media', {}, [
         attachmentView(e.attachment),
-      ]),
+      ].concat((e.extra_files || []).length ? [h('p.section-title.more-files', { text: 'More files (' + e.extra_files.length + ')' })].concat(
+        e.extra_files.map(function (f, i) { return h('div.extra-file', {}, [attachmentView(f, 'extra-' + i)]); })) : [])),
       h('div.detail-side', {}, [
       e.flags.length ? h('div.flags', {}, e.flags.map(function (f) {
         return f.level === 'info' ? h('div.flag.info', { text: f.message }) : h('div.flag', { text: f.message });
@@ -1833,15 +1841,16 @@
       }
     }
     if (!e.can.edit || !e.editable) { go('/expense/' + encodeURIComponent(id)); return; }
-    if (e.attachment && e.attachment.pending) {
-      // The edit form shows the current photo: wait for it if it is still on its way.
+    const pendingExtras = (e.extra_files || []).some(function (f) { return f && f.pending; });
+    if ((e.attachment && e.attachment.pending) || pendingExtras) {
+      // The edit form shows the current photos: wait for them if they are still on their way.
       mount(page([loading()]));
       try {
         const f = filesCache[id] || await Api.call('getExpenseFiles', { id: id });
         filesCache[id] = f;
-        e = Object.assign({}, e, { attachment: f.attachment || null });
+        e = Object.assign({}, e, { attachment: e.attachment ? f.attachment || null : null, extra_files: f.extra_files || [] });
       } catch (err) {
-        e = Object.assign({}, e, { attachment: { error: 'The current photo could not be loaded.' } });
+        e = Object.assign({}, e, { attachment: { error: 'The current photo could not be loaded.' }, extra_files: [] });
       }
     }
     renderForm(e);
@@ -1865,6 +1874,10 @@
     // The photo already on file (edit mode) stays unless replaced or removed.
     let keptAttachment = editing && existing.attachment && !existing.attachment.error ? existing.attachment : null;
     let removedAttachment = false;
+    // More files after the main one (payment QR code, more pages…): kept ones {kept, id, mime, base64} or new uploads.
+    let extras = editing ? (existing.extra_files || []).filter(function (f) { return f && f.id && !f.error; })
+      .map(function (f) { return { kept: true, id: f.id, mime: f.mime, base64: f.base64, name: 'Current file' }; }) : [];
+    const MAX_FILES = 5;
     let preparing = null;       // promise while compressing
     let submitting = false;
     const fieldEls = {};        // field -> wrapper, for error display
@@ -1900,7 +1913,7 @@
       const v = values;
       const filled = function (x) { return Boolean(String(x === undefined || x === null ? '' : x).trim()); };
       return [
-        ['file', true, Boolean(attachment || keptAttachment || v.no_doc_reason)],
+        ['file', true, Boolean(attachment || keptAttachment || extras.length || v.no_doc_reason)],
         ['amount_total', true, Number(v.amount_total) > 0],
         ['expense_category', true, filled(v.expense_category)],
         ['description', v.expense_category === 'OTHER', filled(v.description)],
@@ -2107,7 +2120,45 @@
       const f = ev.dataTransfer && ev.dataTransfer.files[0];
       if (f) pickFile(f);
     });
-    const fileField = field('file', 'Photo of the document', h('div', {}, [fileInput, preview, dropzone]));
+    // More files: a second invoice page, the seller's payment QR code, a delivery note…
+    const extraInput = h('input', { type: 'file', accept: 'image/*,application/pdf', multiple: true, hidden: true, onchange: function () {
+      [].slice.call(extraInput.files || []).forEach(pickExtra);
+      extraInput.value = '';
+    } });
+    const extrasBox = h('div.preview.extras');
+    const addMore = h('button.btn.btn-photo.btn-more', { type: 'button', onclick: function () { extraInput.click(); } }, ['+ Add another photo']);
+    const addMoreHint = h('p.hint', { text: 'For example the seller\'s payment QR code, a second page, or the delivery note. Up to ' + MAX_FILES + ' files.' });
+    const fileField = field('file', 'Photo of the document', h('div', {}, [fileInput, preview, dropzone, extraInput, extrasBox, addMore, addMoreHint]));
+
+    function paintExtras(status) {
+      extrasBox.textContent = '';
+      if (status === 'working') extrasBox.appendChild(h('p.hint', { text: 'Preparing photo…' }));
+      extras.forEach(function (x, i) {
+        const isImg = String(x.mime).indexOf('image/') === 0;
+        extrasBox.appendChild(h('div.preview-row', {}, [
+          isImg ? h('img.thumb', { src: 'data:' + x.mime + ';base64,' + x.base64, alt: 'File ' + (i + 2) }) : h('span.pdf', { text: 'PDF' }),
+          h('div.preview-info', {}, [h('span', { text: x.kept ? 'File ' + (i + 2) + ' (already attached)' : x.name }),
+            x.kept ? null : h('span.hint', { text: Math.round(x.sizeAfter / 1024) + ' KB' })]),
+          h('button.link', { type: 'button', text: 'Remove', onclick: function () { extras.splice(extras.indexOf(x), 1); touched.file = true; paintAttachment(); } }),
+        ]));
+      });
+    }
+
+    function pickExtra(file) {
+      if ((attachment || keptAttachment ? 1 : 0) + extras.length >= MAX_FILES) { showError('file', 'Up to ' + MAX_FILES + ' files.'); return; }
+      clearError('file');
+      paintExtras('working');
+      const job = Attachment.prepare(file, state.limits.maxUploadMb).then(function (a) {
+        extras.push(a);
+        startUpload(a, 'expense');
+        paintAttachment();
+      }).catch(function (err) {
+        paintAttachment();
+        showError('file', err.message);
+      });
+      preparing = preparing ? Promise.all([preparing, job]) : job;
+      job.finally(function () { if (preparing === job) preparing = null; });
+    }
 
     function paintAttachment(status) {
       preview.textContent = '';
@@ -2131,9 +2182,13 @@
           h('button.link', { type: 'button', text: 'Remove', onclick: function () { attachment = null; fileInput.value = ''; touched.file = true; paintAttachment(); } }),
         ]));
       }
-      const hasDoc = Boolean(attachment || keptAttachment);
+      const hasMain = Boolean(attachment || keptAttachment);
+      const hasDoc = hasMain || extras.length > 0;
+      paintExtras();
+      addMore.hidden = !hasMain || (hasMain ? 1 : 0) + extras.length >= MAX_FILES || status === 'working';
+      addMoreHint.hidden = addMore.hidden || extras.length > 0;
       dropzone.classList.toggle('compact', hasDoc);
-      dropTitle.textContent = hasDoc ? 'Replace photo' : 'Take or choose a photo';
+      dropTitle.textContent = hasMain ? 'Replace photo' : 'Take or choose a photo';
       noDocField.hidden = hasDoc || status === 'working' || !noDocOpen;
       noDocNoteField.hidden = noDocField.hidden || values.no_doc_reason !== 'OTHER';
       noDocToggle.hidden = hasDoc || status === 'working' || noDocOpen;
@@ -2351,6 +2406,14 @@
         if (attachment) { Object.assign(payload, await filePayload(attachment)); payload.no_doc_reason = ''; }
         submitBtn.textContent = 'Submitting…';
         if (!attachment && keptAttachment) payload.no_doc_reason = '';
+        payload.extraFiles = [];
+        for (let i = 0; i < extras.length; i++) {
+          const x = extras[i];
+          if (x.kept) { payload.extraFiles.push({ keep: x.id }); continue; }
+          const p = await filePayload(x);
+          payload.extraFiles.push(p.fileRef ? { ref: p.fileRef } : p.file);
+        }
+        if (extras.length) payload.no_doc_reason = '';
         if (!payload.no_doc_reason) payload.no_doc_note = '';
         payload.confirmWarnings = Boolean(confirmWarnings);
         if (editing) { payload.id = existing.expense_id; payload.removeAttachment = removedAttachment && !attachment; }
@@ -2362,6 +2425,7 @@
         const res = await Api.call(editing ? 'editExpense' : 'submitExpense', payload);
         if (!res.saved) { showWarnings(res.warnings); return; }
         if (!editing) clearDraft();
+        if (editing) delete filesCache[existing.expense_id];   // its photos may have changed
         state.detail = null;
         upsert('mine', res.expense);
         toast(!editing ? 'Submitted ' + res.expense.expense_id
@@ -2370,7 +2434,7 @@
               : 'Saved ' + res.expense.expense_id, 'ok');
         go('/');
       } catch (err) {
-        if (uploadExpired(err, attachment)) {
+        if (uploadExpired(err, attachment) || extras.some(function (x) { return !x.kept && uploadExpired(err, x); })) {
           retryAfterExpiry = true;   // handled below, after the button is reset
         } else if (err.code === 'VALIDATION' && err.details.length) {
           if (!editing && err.details.some(function (d) { return d.field === 'send_to'; })) reloadSendTo();

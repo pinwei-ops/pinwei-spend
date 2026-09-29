@@ -437,3 +437,9 @@ details.more[open] > summary::after, details.more-inline[open] > summary::after 
 
 .tg-code { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 8px; background: var(--muted-bg); }
 .tg-code code { font-size: 1rem; user-select: all; word-break: break-all; }
+
+/* Several files per expense: the extra ones under the main photo */
+.btn-more { min-height: 48px; margin-top: 8px; }
+.preview.extras:empty { display: none; }
+.more-files { margin: 18px 0 8px; }
+.extra-file + .extra-file { margin-top: 14px; }
