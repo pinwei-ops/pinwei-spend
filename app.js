@@ -722,9 +722,46 @@
     const date = h('input.input', { type: 'date', value: todayVN(), max: todayVN() });
     const note = h('textarea.input', { rows: 2 });
     let attachment = null;
+    let extras = [];            // more files after the first (payment QR code, more pages)
+    const MAX_FILES = 5;
     let preparing = null;
     const fileInput = h('input', { type: 'file', accept: 'image/*,application/pdf', hidden: true });
     const preview = h('div.preview');
+    const extraInput = h('input', { type: 'file', accept: 'image/*,application/pdf', multiple: true, hidden: true, onchange: function () {
+      [].slice.call(extraInput.files || []).forEach(pickExtra);
+      extraInput.value = '';
+    } });
+    const extrasBox = h('div.preview.extras');
+    const addMore = h('button.btn.btn-photo.btn-more', { type: 'button', hidden: true, onclick: function () { extraInput.click(); } }, ['+ Add another file']);
+    const addMoreHint = h('p.hint', { hidden: true, text: 'Payment QR code, more pages. Photo or PDF, up to ' + MAX_FILES + ' files.' });
+    // Once there is a file, each one has Remove and more are added below.
+    function paintFiles() {
+      const hasDoc = Boolean(attachment) || extras.length > 0;
+      dropzone.hidden = hasDoc;
+      noDoc.hidden = hasDoc;
+      extrasBox.textContent = '';
+      extras.forEach(function (x) {
+        extrasBox.appendChild(h('div.preview-row', {}, [
+          x.mime.indexOf('image/') === 0 ? h('img.thumb', { src: 'data:' + x.mime + ';base64,' + x.base64, alt: 'More' }) : h('span.pdf', { text: 'PDF' }),
+          h('div.preview-info', {}, [h('span', { text: x.name })]),
+          h('button.link', { type: 'button', text: 'Remove', onclick: function () { extras.splice(extras.indexOf(x), 1); paintFiles(); touch('file'); } }),
+        ]));
+      });
+      addMore.hidden = !hasDoc || (attachment ? 1 : 0) + extras.length >= MAX_FILES;
+      addMoreHint.hidden = addMore.hidden || extras.length > 0;
+      validate();
+    }
+    function pickExtra(f) {
+      if ((attachment ? 1 : 0) + extras.length >= MAX_FILES) return;
+      const job = Attachment.prepare(f, (state.limits && state.limits.maxUploadMb) || 10).then(function (a) {
+        extras.push(a);
+        startUpload(a, 'petty');
+        paintFiles();
+      }).catch(function (err) { if (errs.file) { errs.file.textContent = err.message; errs.file.hidden = false; } });
+      preparing = preparing ? Promise.all([preparing, job]) : job;
+      job.finally(function () { if (preparing === job) preparing = null; validate(); });
+    }
+    const filesBox = function () { return h('div', {}, [fileInput, preview, dropzone, extraInput, extrasBox, addMore, addMoreHint]); };
     const dropzone = h('button.dropzone', { type: 'button', onclick: function () { fileInput.click(); } }, [
       h('span.dropzone-title', { text: 'Take or choose a photo' }),
       h('span.dropzone-sub', { text: kind === 'deposit' ? 'Cheque or withdrawal slip (optional)' : 'Receipt or bill. PDF works too.' }),
@@ -746,10 +783,9 @@
         preview.appendChild(h('div.preview-row', {}, [
           a.mime.indexOf('image/') === 0 ? h('img.thumb', { src: 'data:' + a.mime + ';base64,' + a.base64, alt: 'Receipt' }) : h('span.pdf', { text: 'PDF' }),
           h('div.preview-info', {}, [h('span', { text: f.name })]),
-          h('button.link', { type: 'button', text: 'Remove', onclick: function () { pickSeq++; attachment = null; preview.textContent = ''; noDoc.hidden = false; dropzone.hidden = false; touch('file'); } }),
+          h('button.link', { type: 'button', text: 'Remove', onclick: function () { pickSeq++; attachment = null; preview.textContent = ''; paintFiles(); touch('file'); } }),
         ]));
-        noDoc.hidden = true;
-        dropzone.hidden = true;
+        paintFiles();
         validate();
       }).catch(function (err) { if (mine === pickSeq) { attachment = null; preview.textContent = err.message; } })
         .finally(function () { if (preparing === job) preparing = null; validate(); });
@@ -798,7 +834,7 @@
       outlet.addEventListener('change', function () { touch('outlet_code'); });
       rules = [
         ['amount', 'Amount', 'Enter the amount. This field is required.', function () { return amount.value() > 0; }],
-        ['file', 'Photo or reason', 'Attach a photo of the receipt, or choose why there is none.', function () { return Boolean(attachment || reasonSel.value); }],
+        ['file', 'Photo or reason', 'Attach a photo of the receipt, or choose why there is none.', function () { return Boolean(attachment || extras.length || reasonSel.value); }],
         ['outlet_code', 'Outlet', 'Choose the outlet. This field is required.', function () { return Boolean(outlet.value); }],
         ['expense_category', 'Category', 'Choose a category. This field is required.', function () { return Boolean(category); }],
         ['description', 'What for', 'Write what it was for. This field is required.', function () { return Boolean(note.value.trim()); }],
@@ -806,7 +842,7 @@
       ];
       body = [
         fieldBox('amount', 'Amount', amount.el),
-        fieldBox('file', 'Photo of the receipt', h('div', {}, [fileInput, preview, dropzone])),
+        fieldBox('file', 'Receipt (photo or PDF)', filesBox()),
         noDoc,
         fieldBox('outlet_code', 'For which outlet?', outlet),
         fieldBox('expense_category', 'Category', catGrid),
@@ -816,7 +852,7 @@
       action = 'pettySpend';
       payloadOf = function () {
         return { amount: amount.value(), entry_date: date.value, outlet_code: outlet.value, expense_category: category, description: note.value.trim(),
-          no_doc_reason: attachment ? '' : reasonSel.value, no_doc_note: attachment ? '' : reasonNote.value.trim() };
+          no_doc_reason: attachment || extras.length ? '' : reasonSel.value, no_doc_note: attachment || extras.length ? '' : reasonNote.value.trim() };
       };
     } else if (kind === 'deposit') {
       note.placeholder = 'e.g. Cheque no. 123, signed by Eddy';
@@ -828,7 +864,7 @@
         h('p.hint', { text: 'Record the cash you are handing to the cash keeper. It is added to the balance when she confirms how much she received.' }),
         fieldBox('amount', 'Amount', amount.el),
         fieldBox('entry_date', 'Date', date),
-        fieldBox('file', 'Photo of the cheque or withdrawal slip (optional)', h('div', {}, [fileInput, preview, dropzone])),
+        fieldBox('file', 'Cheque or withdrawal slip (optional)', filesBox()),
         fieldBox('description', 'Note (optional)', note),
       ];
       action = 'pettyDeposit';
@@ -889,11 +925,21 @@
         submit.textContent = 'Saving…';
         const payload = payloadOf();
         if (attachment && kind !== 'count') Object.assign(payload, await filePayload(attachment));
+        if (extras.length && kind !== 'count') {
+          payload.extraFiles = [];
+          for (let i = 0; i < extras.length; i++) { const fp = await filePayload(extras[i]); payload.extraFiles.push(fp.fileRef ? { ref: fp.fileRef } : fp.file); }
+        }
         let res;
         try { res = await Api.call(action, payload); } catch (ex) {
-          if (!uploadExpired(ex, attachment)) throw ex;
+          const expired = [attachment].concat(extras).filter(Boolean).map(function (x) { return uploadExpired(ex, x); }).some(Boolean);
+          if (!expired) throw ex;
           delete payload.fileRef;
-          res = await Api.call(action, Object.assign(payload, await filePayload(attachment)));
+          if (attachment) Object.assign(payload, await filePayload(attachment));
+          if (extras.length) {
+            payload.extraFiles = [];
+            for (let i = 0; i < extras.length; i++) { const fp = await filePayload(extras[i]); payload.extraFiles.push(fp.fileRef ? { ref: fp.fileRef } : fp.file); }
+          }
+          res = await Api.call(action, payload);
         }
         toast(kind === 'spend' ? 'Saved · ' + fmtMoney(res.balance) + ' left' : kind === 'deposit' ? 'Deposit recorded — waiting for the keeper to confirm'
           : res.difference ? 'Count saved · ' + (res.difference < 0 ? 'short ' : 'over ') + fmtMoney(Math.abs(res.difference)) : 'Count saved · matches', 'ok');
@@ -922,7 +968,8 @@
     // Already in the Cash list: shown at once; only the photo is fetched.
     const known = state.cash ? (state.cash.pending || []).concat(state.cash.entries || []).filter(function (e) { return e.entry_id === id; })[0] : null;
     if (known) {
-      drawCashEntry(back, Object.assign({}, known, { attachment: known.has_doc ? { pending: true } : null }));
+      drawCashEntry(back, Object.assign({}, known, { attachment: known.has_doc ? { pending: true } : null,
+        extra_files: Array.apply(null, Array(known.extra_count || 0)).map(function () { return { pending: true }; }) }));
       if (!known.has_doc) return;
     } else {
       mount(page([back, loading()]));
@@ -938,6 +985,10 @@
     if (!known) { drawCashEntry(back, x); return; }
     const slot = document.querySelector('[data-slot="attachment"]');
     if (slot) slot.replaceWith(x.attachment ? attachmentView(x.attachment) : h('div.doc-missing', { text: 'The photo could not be loaded.' }));
+    (x.extra_files || []).forEach(function (f, i) {
+      const ph = document.querySelector('[data-slot="extra-' + i + '"]');
+      if (ph) ph.replaceWith(attachmentView(f));
+    });
   }
 
   function drawCashEntry(back, x) {
@@ -945,11 +996,13 @@
     const doc = x.entry_type === 'SPEND' || x.attachment
       ? (x.attachment ? attachmentView(x.attachment) : h('div.doc-missing', { text: 'No receipt: ' + label('no_doc_reason', x.no_doc_reason) + (x.no_doc_note ? ' — ' + x.no_doc_note : '') }))
       : null;
+    const more = (x.extra_files || []).length ? [h('p.section-title.more-files', { text: 'More files (' + x.extra_files.length + ')' })].concat(
+      x.extra_files.map(function (f, i) { return h('div.extra-file', {}, [attachmentView(f, 'extra-' + i)]); })) : [];
     homeTab = 'cash';
     mount(page([
       back,
       h('div.detail-grid', {}, [
-        doc ? h('div.detail-media', {}, [doc]) : null,
+        doc ? h('div.detail-media', {}, [doc].concat(more)) : null,
         h('div.detail-side', {}, [
           x.voided ? h('div.flag', { text: 'This entry was cancelled. See the cancelling entry in the list.' }) : null,
           h('div.card', {}, [
