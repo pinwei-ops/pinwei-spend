@@ -1898,7 +1898,7 @@
     const shownRequired = {};
     let formReady = false;
     const REQUIRED = {
-      file: ['Photo or reason', 'Attach a photo, or choose why there is no document.'],
+      file: ['Document or reason', 'Attach a photo or PDF, or choose why there is no document.'],
       amount_total: ['Amount', 'Enter the amount. This field is required.'],
       expense_category: ['Category', 'Choose a category. This field is required.'],
       description: ['Description', 'Write what it was for. Required when the category is "Other".'],
@@ -2126,9 +2126,9 @@
       extraInput.value = '';
     } });
     const extrasBox = h('div.preview.extras');
-    const addMore = h('button.btn.btn-photo.btn-more', { type: 'button', onclick: function () { extraInput.click(); } }, ['+ Add another photo']);
-    const addMoreHint = h('p.hint', { text: 'For example the seller\'s payment QR code, a second page, or the delivery note. Up to ' + MAX_FILES + ' files.' });
-    const fileField = field('file', 'Photo of the document', h('div', {}, [fileInput, preview, dropzone, extraInput, extrasBox, addMore, addMoreHint]));
+    const addMore = h('button.btn.btn-photo.btn-more', { type: 'button', onclick: function () { extraInput.click(); } }, ['+ Add another file']);
+    const addMoreHint = h('p.hint', { text: 'Payment QR code, more pages, delivery note. Photo or PDF, up to ' + MAX_FILES + ' files.' });
+    const fileField = field('file', 'Document (photo or PDF)', h('div', {}, [fileInput, preview, dropzone, extraInput, extrasBox, addMore, addMoreHint]));
 
     function paintExtras(status) {
       extrasBox.textContent = '';
@@ -2185,10 +2185,10 @@
       const hasMain = Boolean(attachment || keptAttachment);
       const hasDoc = hasMain || extras.length > 0;
       paintExtras();
-      addMore.hidden = !hasMain || (hasMain ? 1 : 0) + extras.length >= MAX_FILES || status === 'working';
+      // Once there is a file, each one has Remove and more are added below: no "replace".
+      addMore.hidden = !hasDoc || (hasMain ? 1 : 0) + extras.length >= MAX_FILES || status === 'working';
       addMoreHint.hidden = addMore.hidden || extras.length > 0;
-      dropzone.classList.toggle('compact', hasDoc);
-      dropTitle.textContent = hasMain ? 'Replace photo' : 'Take or choose a photo';
+      dropzone.hidden = hasDoc;
       noDocField.hidden = hasDoc || status === 'working' || !noDocOpen;
       noDocNoteField.hidden = noDocField.hidden || values.no_doc_reason !== 'OTHER';
       noDocToggle.hidden = hasDoc || status === 'working' || noDocOpen;
