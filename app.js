@@ -746,9 +746,10 @@
         preview.appendChild(h('div.preview-row', {}, [
           a.mime.indexOf('image/') === 0 ? h('img.thumb', { src: 'data:' + a.mime + ';base64,' + a.base64, alt: 'Receipt' }) : h('span.pdf', { text: 'PDF' }),
           h('div.preview-info', {}, [h('span', { text: f.name })]),
-          h('button.link', { type: 'button', text: 'Remove', onclick: function () { pickSeq++; attachment = null; preview.textContent = ''; noDoc.hidden = false; touch('file'); } }),
+          h('button.link', { type: 'button', text: 'Remove', onclick: function () { pickSeq++; attachment = null; preview.textContent = ''; noDoc.hidden = false; dropzone.hidden = false; touch('file'); } }),
         ]));
         noDoc.hidden = true;
+        dropzone.hidden = true;
         validate();
       }).catch(function (err) { if (mine === pickSeq) { attachment = null; preview.textContent = err.message; } })
         .finally(function () { if (preparing === job) preparing = null; validate(); });
@@ -1605,6 +1606,7 @@
     const sourceInput = h('input.input', { autocomplete: 'off', placeholder: 'e.g. VCB-8866 (optional)' });
     const fileInput = h('input', { type: 'file', accept: 'image/*,application/pdf', hidden: true });
     const proofBox = h('div.preview');
+    const attachProof = h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['Attach transfer confirmation']);
     const err = h('p.error', { hidden: true });
     const btn = h('button.btn.btn-approve.btn-big', { type: 'button' });
 
@@ -1664,6 +1666,7 @@
 
     function paintProof(status) {
       proofBox.textContent = '';
+      attachProof.hidden = Boolean(proof) || status === 'working';
       if (status === 'working') proofBox.appendChild(h('p.hint', { text: 'Preparing photo…' }));
       if (proof) {
         proofBox.appendChild(h('div.preview-row', {}, [
@@ -1797,7 +1800,7 @@
     dateInput.id = 'pay_date';
     methodSelect.id = 'pay_method';
     [h('div.field', {}, [proofLabel, fileInput, proofBox,
-        h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['Attach transfer confirmation']), proofErr]),
+        attachProof, proofErr]),
       h('div.field', {}, [starLabel(h('label.label', { for: 'pay_amount', text: 'Amount paid' })), h('div.money-wrap', {}, [amountInput, h('span.suffix', { text: '₫' })]), words, hint, amountErr]),
       h('div.grid2', {}, [
         h('div.field', {}, [starLabel(h('label.label', { for: 'pay_date', text: 'Paid on' })), dateInput, dateErr]),
