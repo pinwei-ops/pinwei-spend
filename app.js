@@ -1088,7 +1088,7 @@
     REJECT: 'Rejected', REQUEST_INFO: 'Asked for more info', RESUBMIT: 'Resubmitted',
     EDIT: 'Edited', EDIT_NEEDS_REAPPROVAL: 'Edited — needs approval again', CANCEL: 'Cancelled', POST_CHECK: 'Cash payment post-checked',
     PAY_FULL: 'Paid in full', PAY_PARTIAL: 'Partial payment',
-    REVIEW_REQUEST: 'Accountant asked for a review', PAY_VOID: 'Payment record voided',
+    REVIEW_REQUEST: 'Accountant asked for a review', ACCOUNTANT_REQUEST_INFO: 'Accountant asked for more info', PAY_VOID: 'Payment record voided',
     POST_CHECK_PROBLEM: 'Problem reported at the cash check', SYSTEM_CLEAR_DEMO: 'Demo data cleared',
   };
 
@@ -1454,6 +1454,7 @@
   function reviewRequestPanel(e) {
     const opts = e.review_options || [];
     const target = opts[0];
+    if (e.review_to_submitter && target) return backToSubmitterPanel(e, target);
     const panel = h('div.decide');
     const box = h('textarea.input', { id: 'review_reason', rows: 3, placeholder: 'e.g. The invoice total does not match the amount' });
     const err = h('p.error', { hidden: true });
@@ -1486,6 +1487,42 @@
       panel.appendChild(starLabel(h('label.label', { for: 'review_reason', text: 'What looks wrong?' })));
       panel.appendChild(box);
       requireText(box, send, err, 'Write what looks wrong. This field is required.');
+      panel.appendChild(err);
+      panel.appendChild(h('div.row', {}, [h('button.btn', { type: 'button', text: 'Back', onclick: collapsed }), send]));
+      box.focus();
+    }
+    collapsed();
+    return panel;
+  }
+
+  /** Accountant, on an expense sent straight to them: the question goes back to the person who sent it. */
+  function backToSubmitterPanel(e, target) {
+    const panel = h('div.decide');
+    const box = h('textarea.input', { id: 'review_reason', rows: 3, placeholder: 'e.g. The invoice total does not match the amount' });
+    const err = h('p.error', { hidden: true });
+    function collapsed() {
+      panel.textContent = '';
+      panel.appendChild(h('button.btn', { type: 'button', text: 'Something looks wrong? Send back to ' + target.label, onclick: expanded }));
+    }
+    function expanded() {
+      panel.textContent = '';
+      err.hidden = true;
+      panel.appendChild(h('h2.section-title', { text: 'Send back to ' + target.label }));
+      const send = h('button.btn.btn-primary', { type: 'button', text: 'Send back' });
+      send.addEventListener('click', async function () {
+        const reason = box.value.trim();
+        if (!reason) { err.textContent = 'Write what is wrong or missing.'; err.hidden = false; box.focus(); return; }
+        send.disabled = true;
+        try {
+          const res = await Api.call('requestReview', { id: e.expense_id, reviewer_id: target.value, reason: reason });
+          afterAction(res, 'Sent back to ' + target.label + ': ' + e.expense_id);
+        } catch (ex) { err.textContent = ex.message; err.hidden = false; send.disabled = false; }
+      });
+      panel.appendChild(h('p.hint', {}, ['It was sent straight to you, so it goes back to ', h('strong', { text: target.label }),
+        ' with your question. When it is fixed and sent again, it comes back to your Pay list.']));
+      panel.appendChild(starLabel(h('label.label', { for: 'review_reason', text: 'What is wrong or missing?' })));
+      panel.appendChild(box);
+      requireText(box, send, err, 'Write what is wrong or missing. This field is required.');
       panel.appendChild(err);
       panel.appendChild(h('div.row', {}, [h('button.btn', { type: 'button', text: 'Back', onclick: collapsed }), send]));
       box.focus();
@@ -2290,6 +2327,9 @@
     const sendToList = h('div.radios');
     // Money back to the submitter, out of the cash box, or to a third party always needs an approver.
     const NEEDS_APPROVER = ['OTHER', 'SUBMITTER', 'OUTLET_CASH'];
+    // Before sending straight to the accountant: what happens if something is wrong.
+    const directNote = h('p.hint.direct-note', { text: 'Nobody approves it first: the accountant checks it before paying. If something is wrong or missing, it comes back to you to fix.' });
+    function paintDirectNote() { directNote.hidden = values.send_to !== 'ACCOUNTANT'; }
     function refreshSendTo(purchaseDefault) {
       const opts = (state.ref.sendTo[values.outlet_code] || []).filter(function (o) {
         return !(o.kind === 'ACCOUNTANT' && NEEDS_APPROVER.indexOf(values.payee_type) !== -1);
@@ -2310,10 +2350,12 @@
       opts.forEach(function (o) {
         const id = 'sendto_' + o.value;
         sendToList.appendChild(h('label.radio', { for: id }, [
-          h('input', { type: 'radio', name: 'send_to', id: id, value: o.value, checked: values.send_to === o.value, onchange: function () { set('send_to', o.value); } }),
+          h('input', { type: 'radio', name: 'send_to', id: id, value: o.value, checked: values.send_to === o.value, onchange: function () { set('send_to', o.value); paintDirectNote(); } }),
           h('span', { text: o.label }),
         ]));
       });
+      sendToList.appendChild(directNote);
+      paintDirectNote();
       paintSummary();
     }
     /** Fresh approver list from the server (someone may have been added or deactivated since sign-in). */
