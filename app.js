@@ -2331,8 +2331,9 @@
     const directNote = h('p.hint.direct-note', { text: 'Nobody approves it first: the accountant checks it before paying. If something is wrong or missing, it comes back to you to fix.' });
     function paintDirectNote() { directNote.hidden = values.send_to !== 'ACCOUNTANT'; }
     function refreshSendTo(purchaseDefault) {
+      // Paying you back and buying something not bought yet both need an approver: no "pay directly".
       const opts = (state.ref.sendTo[values.outlet_code] || []).filter(function (o) {
-        return !(o.kind === 'ACCOUNTANT' && NEEDS_APPROVER.indexOf(values.payee_type) !== -1);
+        return !(o.kind === 'ACCOUNTANT' && (NEEDS_APPROVER.indexOf(values.payee_type) !== -1 || values.request_type === 'PURCHASE_REQUEST'));
       });
       if (purchaseDefault || !opts.some(function (o) { return o.value === values.send_to; })) {
         // Spec §6.1: purchase requests default to an owner; invoices to the accountant.
