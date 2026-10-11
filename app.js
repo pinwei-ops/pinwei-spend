@@ -2208,7 +2208,7 @@
     // --- request type
     const typeField = field('request_type', null, choices('request_type', [
       { value: 'INVOICE', label: 'Already bought', sub: 'I have an invoice or receipt', onpick: function () { if (!editing) refreshSendTo(); } },
-      { value: 'PURCHASE_REQUEST', label: 'Not bought yet', sub: 'Ask for approval before buying', onpick: function () { if (!editing) refreshSendTo(true); } },
+      { value: 'PURCHASE_REQUEST', label: 'Not bought yet', sub: 'Ask for approval before buying', onpick: function () { if (!editing) refreshSendTo(); } },
     ], 2, 'What is this?'));
 
     // --- attachment
@@ -2352,15 +2352,16 @@
     // Before sending straight to the accountant: what happens if something is wrong.
     const directNote = h('p.hint.direct-note', { text: 'Nobody approves it first: the accountant checks it before paying. If something is wrong or missing, it comes back to you to fix.' });
     function paintDirectNote() { directNote.hidden = values.send_to !== 'ACCOUNTANT'; }
-    function refreshSendTo(purchaseDefault) {
+    let sendAuto = false;   // the only option was ticked for the user, not by them
+    function refreshSendTo() {
       // Paying you back and buying something not bought yet both need an approver: no "pay directly".
       const opts = (state.ref.sendTo[values.outlet_code] || []).filter(function (o) {
         return !(o.kind === 'ACCOUNTANT' && (NEEDS_APPROVER.indexOf(values.payee_type) !== -1 || values.request_type === 'PURCHASE_REQUEST'));
       });
-      if (purchaseDefault || !opts.some(function (o) { return o.value === values.send_to; })) {
-        // Spec §6.1: purchase requests default to an owner; invoices to the accountant.
-        const owner = opts.find(function (o) { return o.kind === 'OWNER'; }) || opts.find(function (o) { return o.kind === 'ADMIN'; });
-        values.send_to = values.request_type === 'PURCHASE_REQUEST' && owner ? owner.value : (opts[0] || {}).value;
+      if (!opts.some(function (o) { return o.value === values.send_to; }) || (sendAuto && opts.length > 1)) {
+        // Nothing is chosen for the user: they decide who it goes to. (With a single option there is nothing to decide.)
+        values.send_to = opts.length === 1 ? opts[0].value : '';
+        sendAuto = opts.length === 1;
         saveDraft(values);
       }
       sendToList.textContent = '';
@@ -2373,13 +2374,14 @@
       opts.forEach(function (o) {
         const id = 'sendto_' + o.value;
         sendToList.appendChild(h('label.radio', { for: id }, [
-          h('input', { type: 'radio', name: 'send_to', id: id, value: o.value, checked: values.send_to === o.value, onchange: function () { set('send_to', o.value); paintDirectNote(); } }),
+          h('input', { type: 'radio', name: 'send_to', id: id, value: o.value, checked: values.send_to === o.value, onchange: function () { sendAuto = false; set('send_to', o.value); paintDirectNote(); } }),
           h('span', { text: o.label }),
         ]));
       });
       sendToList.appendChild(directNote);
       paintDirectNote();
       paintSummary();
+      checkRequired();
     }
     /** Fresh approver list from the server (someone may have been added or deactivated since sign-in). */
     function reloadSendTo() {
