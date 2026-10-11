@@ -388,7 +388,7 @@ details.more-inline[open] > .input { margin-top: 6px; }
 .hint.over { color: var(--bad); font-weight: 600; }
 .field.has-error .choice, .field.has-error .cat-grid .chip-btn, .field.has-error .dropzone { border-color: var(--bad); }
 .submit-summary { margin: 0 0 8px; text-align: center; font-size: .9rem; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
-.sticky-submit:has(.submit-summary:not([hidden])) { padding-top: 8px; border-top: 1px solid var(--line); background: var(--bg); }
+.sticky-submit:has(.submit-summary:not([hidden])), .sticky-submit:has(.missing-line:not([hidden])) { padding-top: 8px; border-top: 1px solid var(--line); background: var(--bg); }
 
 /* Payment entries stack vertically: amount, details, proof, then the void action underneath */
 .pay-card { flex-direction: column; gap: 8px; }
@@ -428,7 +428,7 @@ details.more[open] > summary::after, details.more-inline[open] > summary::after 
   display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: var(--radius); background: var(--navy); color: var(--navy-fg); box-shadow: var(--shadow); font-weight: 500; }
 .update-bar .btn { min-height: 36px; padding: 6px 12px; background: #fff; color: var(--navy); border-color: #fff; }
 .month-export { display: flex; gap: 8px; align-items: stretch; }
-.month-export .input { flex: 1; }
+.month-export .input, .month-export .btn { flex: 1 1 0; width: auto; min-width: 0; }
 .id-nowrap { white-space: nowrap; }
 .problem-panel { border-color: var(--bad); }
 .brand { min-width: 44px; }

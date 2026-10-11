@@ -535,7 +535,7 @@
     return [
       h('div.filters', {}, [h('div.grid2', {}, [outletSel, statusSel]), search]),
       rows.length > 1 ? listControls(null) : null,
-      EXPORT_MONTH_ROLES.indexOf(state.user.role) !== -1 && state.user.role !== 'ACCOUNTANT' ? monthExportRow() : null,
+      monthExportRow(),
       stats([
         { value: rows.length, label: 'Shown', brand: true },
         { value: fmtShort(total), label: 'Total' },
@@ -606,7 +606,7 @@
       const last = groups[groups.length - 1];
       if (last && last.day === day) last.items.push(x); else groups.push({ day: day, items: [x] });
     });
-    const monthIn = h('input.input', { type: 'month', 'aria-label': 'Month to export', value: todayVN().slice(0, 7), max: todayVN().slice(0, 7) });
+    const monthIn = monthSelect();
     const exportBtn = h('button.btn', { type: 'button', text: 'Export month (CSV)', onclick: async function () {
       if (!/^\d{4}-\d{2}$/.test(monthIn.value)) { toast('Choose a month.'); return; }
       exportBtn.disabled = true;
@@ -748,7 +748,7 @@
         ]));
       });
       addMore.hidden = !hasDoc || (attachment ? 1 : 0) + extras.length >= MAX_FILES;
-      addMoreHint.hidden = addMore.hidden || extras.length > 0;
+      addMoreHint.hidden = addMore.hidden;
       validate();
     }
     function pickExtra(f) {
@@ -900,6 +900,7 @@
     amount.input.addEventListener('input', function () { touch(kind === 'count' ? 'counted' : 'amount'); });
     note.addEventListener('input', function () { if (touchedC.description || note.value) touch('description'); });
     date.addEventListener('change', function () { touch('entry_date'); });
+    function overBalance() { return kind === 'spend' && Boolean(state.cash) && amount.value() > Number(state.cash.balance); }
     function validate(showAll) {
       if (!ready) return [];
       const missing = [];
@@ -910,13 +911,19 @@
         if (showAll) touchedC[r[0]] = true;
         if (p && touchedC[r[0]]) { p.textContent = r[2]; p.hidden = false; p.dataset.required = '1'; }
       });
-      if (!saving) submit.disabled = missing.length > 0;
+      const over = overBalance();
+      if (over && errs.amount) {
+        errs.amount.textContent = 'More than the cash in the box (' + fmtMoney(state.cash.balance) + '). Check the amount, or confirm the latest deposit first.';
+        errs.amount.hidden = false;
+        errs.amount.dataset.required = '1';
+      }
+      if (!saving) submit.disabled = missing.length > 0 || over;
       missingLine.textContent = missing.length ? 'Still needed: ' + missing.join(', ') : '';
       missingLine.hidden = !missing.length;
       return missing;
     }
     submit.addEventListener('click', async function () {
-      if (validate(true).length) return;
+      if (validate(true).length || overBalance()) return;
       saving = true;
       submit.disabled = true;
       summary.hidden = true;
@@ -1092,6 +1099,10 @@
     POST_CHECK_PROBLEM: 'Problem reported at the cash check', SYSTEM_CLEAR_DEMO: 'Demo data cleared',
   };
 
+  // The same words as on the form and the payment button.
+  const REQUEST_TYPE_LABEL = { INVOICE: 'Already bought', PURCHASE_REQUEST: 'Not bought yet' };
+  const PAYMENT_SEQ_LABEL = { DEPOSIT: 'Partial payment', REMAINDER: 'Final payment', FULL: 'Full payment' };
+
   function timelineView(items) {
     // One line per action; the field-level rows of the same action are folded in.
     const lines = [];
@@ -1161,8 +1172,8 @@
       ]) : null, loading('Loading details…')]));
     }
     // Details and photos are asked for at the same time.
-    const filesPromise = filesCache[id] ? Promise.resolve(filesCache[id])
-      : Api.call('getExpenseFiles', { id: id }).then(function (f) { filesCache[id] = f; return f; });
+    const fetchFiles = function () { return Api.call('getExpenseFiles', { id: id }).then(function (f) { filesCache[id] = f; return f; }); };
+    let filesPromise = filesCache[id] ? Promise.resolve(filesCache[id]) : fetchFiles();
     filesPromise.catch(function () { /* the detail call reports problems */ });
     let e;
     try {
@@ -1171,6 +1182,12 @@
       if (!silent) mount(page([backLink(), h('p.empty', { text: err.message })]));
       return;
     }
+    // Photos kept from an earlier look belong to that version: after an edit or a new payment they are fetched again.
+    if (filesCache[id] && filesCache[id].stamp && filesCache[id].stamp !== e.updated_at) {
+      delete filesCache[id];
+      filesPromise = fetchFiles();
+    }
+    filesPromise.then(function (f) { if (!f.stamp) f.stamp = e.updated_at; }, function () { /* reported below */ });
     if (filesCache[id]) {
       e.attachment = e.attachment ? filesCache[id].attachment : null;
       e.extra_files = (e.extra_files || []).map(function (f, i) { return (filesCache[id].extra_files || [])[i] || null; });
@@ -1204,7 +1221,7 @@
       })) : null,
       h('div.card', { 'data-status': e.status }, [
         h('div.item-top', {}, [h('span.amount.big', { text: fmtMoney(e.amount_total) }), statusChip(e.status)]),
-        h('div.item-mid', { text: categoryLabel(e.expense_category) + ' · ' + label('request_type', e.request_type) }),
+        h('div.item-mid', { text: categoryLabel(e.expense_category) + ' · ' + (REQUEST_TYPE_LABEL[e.request_type] || label('request_type', e.request_type)) }),
         row('Submitted by', e.submitted_by_name + ' · ' + e.outlet_code),
         row('Submitted', fmtDateTime(e.created_at)),
         row('Sent to', e.send_to_name),
@@ -1574,10 +1591,23 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
   }
 
+  /** The last 24 months as an English list (the browser's own month picker follows the device language). */
+  function monthSelect() {
+    const names = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    let y = Number(todayVN().slice(0, 4));
+    let m = Number(todayVN().slice(5, 7));
+    const options = [];
+    for (let i = 0; i < 24; i++) {
+      options.push(h('option', { value: y + '-' + (m < 10 ? '0' : '') + m, text: names[m - 1] + ' ' + y }));
+      if (--m === 0) { m = 12; y--; }
+    }
+    return h('select.input', { 'aria-label': 'Month to export' }, options);
+  }
+
   /** Month-end: every payment of a month with its accounting fields (voids as negative rows). */
   function monthExportRow() {
     if (EXPORT_MONTH_ROLES.indexOf(state.user.role) === -1) return null;
-    const month = h('input.input', { type: 'month', 'aria-label': 'Month to export', value: todayVN().slice(0, 7), max: todayVN().slice(0, 7) });
+    const month = monthSelect();
     const btn = h('button.btn', { type: 'button', text: 'Export month (CSV)' });
     btn.addEventListener('click', async function () {
       if (!/^\d{4}-\d{2}$/.test(month.value)) { toast('Choose a month.'); return; }
@@ -1647,7 +1677,7 @@
     const reversal = p.payment_seq === 'REVERSAL';
     const chip = reversal ? h('span.chip.bad', { text: 'Voids ' + p.reverses_payment_id })
       : p.voided ? h('span.chip.muted', { text: 'Voided' })
-      : h('span.chip.ok', { text: label('payment_seq', p.payment_seq) });
+      : h('span.chip.ok', { text: PAYMENT_SEQ_LABEL[p.payment_seq] || label('payment_seq', p.payment_seq) });
     return h('div.item.pay-card', {}, [
       h('div.item-top', {}, [h('span.amount' + (p.voided ? '.struck' : ''), { text: fmtMoney(p.amount) }), chip]),
       reversal && p.note ? h('div.item-note.bad', { text: 'Reason: ' + p.note }) : null,
@@ -1728,6 +1758,7 @@
     const dateErr = h('p.error', { hidden: true });
     const proofErr = h('p.error', { hidden: true });
     const proofLabel = h('span.label', { text: 'Transfer confirmation' });
+    const payHint = h('p.hint');
     const payMissing = h('p.hint.missing-line', { hidden: true, 'aria-live': 'polite' });
     function checkPay(showAll) {
       const bank = methodSelect.value === 'BANK_TRANSFER';
@@ -1743,6 +1774,9 @@
         if (showAll) payTouched[r[0]] = true;
         if (payTouched[r[0]]) { r[2].textContent = r[4]; r[2].hidden = false; }
       });
+      proofLabel.firstChild.nodeValue = bank ? 'Transfer confirmation' : 'Receipt or photo (optional)';
+      attachProof.textContent = bank ? 'Attach transfer confirmation' : 'Attach a photo';
+      payHint.textContent = (bank ? 'Transfer the money in your bank app first' : 'Pay the cash first') + ', then record it here. You will see a summary to check before anything is saved.';
       const star = proofLabel.querySelector('.req-star');
       if (bank && !star) proofLabel.appendChild(h('span.req-star', { text: ' *', 'aria-hidden': 'true' }));
       if (!bank && star) star.remove();
@@ -1807,7 +1841,7 @@
       if (dateInput.value !== todayVN()) warnings.push('The payment date is not today: ' + fmtDate(dateInput.value) + '.');
       if (!cash && !to.account && to.source !== 'outlet_cash') warnings.push('No bank account is on file for this payee. Check where the money went.');
       if (to.source === 'payee') warnings.push('The money goes to an account the submitter gave, not the supplier\'s registered account.');
-      if (cash && e.payee_type !== 'OUTLET_CASH') warnings.push('Cash: the outlet manager will be asked to confirm it afterwards.');
+      if (cash && e.payee_type !== 'OUTLET_CASH') warnings.push('Cash: an owner will be asked to confirm it afterwards.');
 
       const tick = h('input', { type: 'checkbox', id: 'pay_checked' });
       const confirmBtn = h('button.btn.btn-approve.btn-big', { type: 'button', text: partial ? 'Confirm partial payment' : 'Confirm and mark as paid', disabled: true });
@@ -1871,6 +1905,7 @@
         }
         if (res.expense.status === 'PAID') removeFrom('to_pay', e.expense_id); else upsert('to_pay', res.expense);
         if (res.expense.submitted_by === state.user.userId) upsert('mine', res.expense);
+        delete filesCache[e.expense_id];   // the new transfer confirmation is not in it
         state.detail = null;
         toast((res.expense.status === 'PAID' ? 'Paid ' : 'Partial payment recorded: ') + e.expense_id, 'ok');
         go('/');
@@ -1904,7 +1939,7 @@
 
     return h('div.decide', {}, [
       h('h2.section-title', { text: 'Record payment' }),
-      h('p.hint', { text: 'Transfer the money in your bank app first, then record it here. You will see a summary to check before anything is saved.' }),
+      payHint,
       formWrap,
       reviewWrap,
       err,
@@ -2260,7 +2295,7 @@
         const isImg = keptAttachment.mime.indexOf('image/') === 0;
         preview.appendChild(h('div.preview-row', {}, [
           isImg ? h('img.thumb', { src: 'data:' + keptAttachment.mime + ';base64,' + keptAttachment.base64, alt: 'Current document' }) : h('span.pdf', { text: 'PDF' }),
-          h('div.preview-info', {}, [h('span', { text: 'Current document' }), h('span.hint', { text: 'Take a new photo to replace it' })]),
+          h('div.preview-info', {}, [h('span', { text: 'Current document' }), h('span.hint', { text: 'Already attached' })]),
           h('button.link', { type: 'button', text: 'Remove', onclick: function () { keptAttachment = null; removedAttachment = true; touched.file = true; paintAttachment(); } }),
         ]));
       }
@@ -2280,7 +2315,7 @@
       paintExtras();
       // Once there is a file, each one has Remove and more are added below: no "replace".
       addMore.hidden = !hasDoc || (hasMain ? 1 : 0) + extras.length >= MAX_FILES || status === 'working';
-      addMoreHint.hidden = addMore.hidden || extras.length > 0;
+      addMoreHint.hidden = addMore.hidden;
       dropzone.hidden = hasDoc;
       noDocField.hidden = hasDoc || status === 'working' || !noDocOpen;
       noDocNoteField.hidden = noDocField.hidden || values.no_doc_reason !== 'OTHER';
@@ -2406,8 +2441,21 @@
         values.supplier_id = res.supplier.value;
       } catch (err) {
         const dup = err.details && err.details.find(function (d) { return d.existingId; });
-        if (dup) { values.supplier_id = dup.existingId; }  // it already exists: use it
-        else throw err;
+        if (!dup) throw err;
+        // Already in the list: nothing is submitted. The existing supplier is selected, and the user checks it first.
+        const name = dup.existingName || values.new_supplier_name;
+        if (!state.ref.suppliers.some(function (s) { return s.value === dup.existingId; })) {
+          state.ref.suppliers.push({ value: dup.existingId, label: name });
+          supplierSelect.insertBefore(h('option', { value: dup.existingId, text: name }), supplierSelect.querySelector('option[value="' + NEW_SUPPLIER + '"]'));
+        }
+        values.supplier_id = dup.existingId;
+        supplierSelect.value = dup.existingId;
+        newSupplierBox.hidden = true;
+        saveDraft(values);
+        const stop = new Error('This supplier is already in the list: ' + name + '. It is now selected. Check it, then press Submit again.');
+        stop.code = 'VALIDATION';
+        stop.details = [{ field: 'supplier_id', message: stop.message }];
+        throw stop;
       }
       saveDraft(values);
     }
