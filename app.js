@@ -606,7 +606,7 @@
       const last = groups[groups.length - 1];
       if (last && last.day === day) last.items.push(x); else groups.push({ day: day, items: [x] });
     });
-    const monthIn = monthSelect();
+    const monthIn = h('input.input', { type: 'month', 'aria-label': 'Month to export', value: todayVN().slice(0, 7), max: todayVN().slice(0, 7) });
     const exportBtn = h('button.btn', { type: 'button', text: 'Export month (CSV)', onclick: async function () {
       if (!/^\d{4}-\d{2}$/.test(monthIn.value)) { toast('Choose a month.'); return; }
       exportBtn.disabled = true;
@@ -1591,23 +1591,10 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
   }
 
-  /** The last 24 months as an English list (the browser's own month picker follows the device language). */
-  function monthSelect() {
-    const names = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-    let y = Number(todayVN().slice(0, 4));
-    let m = Number(todayVN().slice(5, 7));
-    const options = [];
-    for (let i = 0; i < 24; i++) {
-      options.push(h('option', { value: y + '-' + (m < 10 ? '0' : '') + m, text: names[m - 1] + ' ' + y }));
-      if (--m === 0) { m = 12; y--; }
-    }
-    return h('select.input', { 'aria-label': 'Month to export' }, options);
-  }
-
   /** Month-end: every payment of a month with its accounting fields (voids as negative rows). */
   function monthExportRow() {
     if (EXPORT_MONTH_ROLES.indexOf(state.user.role) === -1) return null;
-    const month = monthSelect();
+    const month = h('input.input', { type: 'month', 'aria-label': 'Month to export', value: todayVN().slice(0, 7), max: todayVN().slice(0, 7) });
     const btn = h('button.btn', { type: 'button', text: 'Export month (CSV)' });
     btn.addEventListener('click', async function () {
       if (!/^\d{4}-\d{2}$/.test(month.value)) { toast('Choose a month.'); return; }
