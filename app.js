@@ -109,6 +109,9 @@
     const into = MERGED_CATEGORIES[code];
     return Boolean(into) && state.ref.categories.some(function (c) { return c.value === into; });
   }
+  // No longer offered on the forms (the code stays readable on older expenses).
+  const HIDDEN_CATEGORIES = ['SECURITY_DEPOSIT'];
+  function offTheForm(code) { return mergedAway(code) || HIDDEN_CATEGORIES.indexOf(code) !== -1; }
   // Kitchen staff (requesters outside head office) never pay these, so they don't see them.
   const HQ_ONLY_CATEGORIES = ['RENT', 'OFFICE', 'SECURITY_DEPOSIT'];
   function categoryShort(code) {
@@ -119,7 +122,7 @@
     const kitchen = state.user.role === 'REQUESTER' && state.user.outletCode !== 'HQ';
     const rank = function (code) { const i = CATEGORY_ORDER.indexOf(code); return i === -1 ? CATEGORY_ORDER.length - 1.5 : i; };
     return state.ref.categories
-      .filter(function (c) { return c.value === current || (!mergedAway(c.value) && (!kitchen || HQ_ONLY_CATEGORIES.indexOf(c.value) === -1)); })
+      .filter(function (c) { return c.value === current || (!offTheForm(c.value) && (!kitchen || HQ_ONLY_CATEGORIES.indexOf(c.value) === -1)); })
       .sort(function (a, b) { return rank(a.value) - rank(b.value); });
   }
 
@@ -829,7 +832,7 @@
       let category = '';
       const catGrid = h('div.cat-grid', { role: 'radiogroup', 'aria-label': 'Category' });
       const paintCats = function () { catGrid.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.value === category); b.setAttribute('aria-checked', b.dataset.value === category); }); };
-      state.ref.categories.filter(function (c) { return !mergedAway(c.value); }).sort(function (a, b) {
+      state.ref.categories.filter(function (c) { return !offTheForm(c.value); }).sort(function (a, b) {
         const r = function (x) { const i = CATEGORY_ORDER.indexOf(x.value); return i === -1 ? 99 : i; };
         return r(a) - r(b);
       }).forEach(function (c) {
@@ -2000,6 +2003,9 @@
       ? Object.assign({}, existing.editable)
       : Object.assign({ request_type: 'INVOICE', outlet_code: state.user.outletCode, payment_method: 'BANK_TRANSFER' }, draft);
     if (!state.ref.outlets.some(function (o) { return o.value === values.outlet_code; })) values.outlet_code = state.ref.outlets[0].value;
+    // A category that left the form (in an unsent draft, or on an older expense): its replacement, or none.
+    if (mergedAway(values.expense_category)) values.expense_category = MERGED_CATEGORIES[values.expense_category];
+    else if (!editing && HIDDEN_CATEGORIES.indexOf(values.expense_category) !== -1) values.expense_category = '';
 
     let attachment = null;      // newly prepared upload
     // The photo already on file (edit mode) stays unless replaced or removed.
