@@ -625,7 +625,8 @@
         { value: fmtMoney(c.spentSinceDeposit), label: 'Spent since deposit' },
         { value: c.lastCount ? (c.lastCount.difference ? signedMoney(c.lastCount.difference) : 'Matched') : '—', label: c.lastCount ? 'Last count · ' + fmtDate(c.lastCount.date) : 'Last count' },
       ]),
-      low ? h('div.flag', { text: 'The cash box is low. To refill it, the next deposit should be about ' + fmtMoney(c.spentSinceDeposit) + ' (what was spent since the last deposit).' }) : null,
+      low ? h('div.flag', { text: 'The cash box is low.' + (Number(c.spentSinceDeposit) > 0
+        ? ' To refill it, the next deposit should be about ' + fmtMoney(c.spentSinceDeposit) + ' (what was spent since the last deposit).' : '') }) : null,
       c.can.spend ? h('a.btn.btn-primary.btn-big', { href: '#/cash-spend' }, ['+ Record a cash spend']) : null,
       c.can.deposit || c.can.count ? h('div.row.cash-actions', {}, [
         c.can.deposit ? h('a.btn', { href: '#/cash-deposit', text: 'Record a deposit' }) : null,
@@ -1101,7 +1102,13 @@
 
   // The same words as on the form and the payment button.
   const REQUEST_TYPE_LABEL = { INVOICE: 'Already bought', PURCHASE_REQUEST: 'Not bought yet' };
-  const PAYMENT_SEQ_LABEL = { DEPOSIT: 'Partial payment', REMAINDER: 'Final payment', FULL: 'Full payment' };
+  /** "Full payment" when it is the only one of a paid expense, "Final payment" for the one that completed it, else "Partial payment". */
+  function paymentLabel(p, e) {
+    const live = (e.payments || []).filter(function (x) { return x.payment_seq !== 'REVERSAL' && !x.voided; });
+    const paid = e.status === 'PAID' || e.status === 'CLOSED';
+    if (!paid || live[live.length - 1] !== p) return 'Partial payment';
+    return live.length === 1 ? 'Full payment' : 'Final payment';
+  }
 
   function timelineView(items) {
     // One line per action; the field-level rows of the same action are folded in.
@@ -1664,7 +1671,7 @@
     const reversal = p.payment_seq === 'REVERSAL';
     const chip = reversal ? h('span.chip.bad', { text: 'Voids ' + p.reverses_payment_id })
       : p.voided ? h('span.chip.muted', { text: 'Voided' })
-      : h('span.chip.ok', { text: PAYMENT_SEQ_LABEL[p.payment_seq] || label('payment_seq', p.payment_seq) });
+      : h('span.chip.ok', { text: paymentLabel(p, e) });
     return h('div.item.pay-card', {}, [
       h('div.item-top', {}, [h('span.amount' + (p.voided ? '.struck' : ''), { text: fmtMoney(p.amount) }), chip]),
       reversal && p.note ? h('div.item-note.bad', { text: 'Reason: ' + p.note }) : null,
@@ -1977,9 +1984,11 @@
    */
   function renderForm(existing) {
     const editing = Boolean(existing);
-    const draft = editing ? {} : loadDraft();
+    const saved = editing ? {} : loadDraft();
     // A draft is kept when someone leaves the form; say so, so an old amount isn't sent by mistake.
-    const restored = ['amount_total', 'expense_category', 'payee_type', 'supplier_id', 'description'].some(function (k) { return draft[k]; });
+    const restored = ['amount_total', 'expense_category', 'payee_type', 'supplier_id', 'description'].some(function (k) { return saved[k]; });
+    // Nothing the person typed (only the form's own defaults, or an old ticked "Send to"): start clean.
+    const draft = restored ? saved : {};
     const values = editing
       ? Object.assign({}, existing.editable)
       : Object.assign({ request_type: 'INVOICE', outlet_code: state.user.outletCode, payment_method: 'BANK_TRANSFER' }, draft);
