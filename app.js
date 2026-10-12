@@ -2418,7 +2418,9 @@
     // Categories named in config (supplier_filter_categories) list only their own suppliers.
     const ownListCategories = (state.limits && state.limits.supplierCategories) || [];
     const plainText = function (s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd').toLowerCase(); };
-    const ADD_SUPPLIER_LABEL = '+ Add a new supplier…';
+    const NEW_SUPPLIER_LABEL = 'New supplier (details below)';
+    // Adding a supplier is its own link under the box: always in sight, however long the list is.
+    const addSupplierLink = h('button.link.picker-add', { type: 'button', text: '+ Add a new supplier', onclick: function () { addNewSupplier(''); } });
     const SUPPLIER_PLACEHOLDER = 'Search or choose a supplier';
     const supplierInput = h('input.input.picker-input', { type: 'text', role: 'combobox', autocomplete: 'off', spellcheck: 'false',
       'aria-expanded': 'false', 'aria-autocomplete': 'list', 'aria-controls': 'supplier_list', placeholder: SUPPLIER_PLACEHOLDER });
@@ -2430,13 +2432,14 @@
       return state.ref.suppliers.filter(function (s) { return s.defaultCategory === cat || s.value === values.supplier_id; });
     }
     function supplierLabel() {
-      if (values.supplier_id === NEW_SUPPLIER) return ADD_SUPPLIER_LABEL;
+      if (values.supplier_id === NEW_SUPPLIER) return NEW_SUPPLIER_LABEL;
       const s = state.ref.suppliers.find(function (x) { return x.value === values.supplier_id; });
       return s ? s.label : '';
     }
     function paintSupplier() {
       if (document.activeElement !== supplierInput) supplierInput.value = supplierLabel();
       newSupplierBox.hidden = values.supplier_id !== NEW_SUPPLIER;
+      addSupplierLink.hidden = values.supplier_id === NEW_SUPPLIER;
       const own = ownListCategories.indexOf(values.expense_category) !== -1;
       supplierNote.textContent = own ? 'Only the suppliers for "' + categoryShort(values.expense_category) + '" are listed.' : '';
       supplierNote.hidden = !own;
@@ -2454,9 +2457,14 @@
         return words.every(function (w) { return text.indexOf(w) !== -1; });
       });
       matches.forEach(function (s) { rows.push({ value: s.value, label: s.label }); });
-      rows.push({ value: NEW_SUPPLIER, label: ADD_SUPPLIER_LABEL, cls: '.add' });
       supplierList.textContent = '';
-      if (words.length && !matches.length) supplierList.appendChild(h('p.picker-empty', { text: 'No supplier matches "' + String(query).trim() + '".' }));
+      const typed = String(query).trim();
+      if (words.length && !matches.length) {
+        // Nothing found: the typed name can go straight into the new-supplier form.
+        supplierList.appendChild(h('p.picker-empty', { text: 'No supplier matches "' + typed + '".' }));
+        supplierList.appendChild(h('div.picker-option.add', { role: 'option', id: 'supplier_opt_new', 'data-value': NEW_SUPPLIER, 'aria-selected': 'false',
+          text: '+ Add "' + typed + '" as a new supplier', onclick: function () { addNewSupplier(typed); } }));
+      }
       rows.forEach(function (r, i) {
         supplierList.appendChild(h('div.picker-option' + (r.cls || ''), { role: 'option', id: 'supplier_opt_' + i, 'data-value': r.value,
           'aria-selected': String(r.value === (values.supplier_id || '')), text: r.label, onclick: function () { pickSupplier(r.value); } }));
@@ -2476,6 +2484,16 @@
         paintCats();
       }
       paintSupplier();
+    }
+    /** Opens the new-supplier form; a name typed in the search box is carried into it. */
+    function addNewSupplier(name) {
+      const nameInput = fieldEls.new_supplier_name.querySelector('input');
+      if (name && !String(values.new_supplier_name || '').trim()) {
+        values.new_supplier_name = name;
+        nameInput.value = name;
+      }
+      pickSupplier(NEW_SUPPLIER);
+      if (!name) nameInput.focus();
     }
     /** Another category was tapped: a supplier that is not on that category's own list is taken out. */
     function supplierCategoryChanged() {
@@ -2520,8 +2538,8 @@
         if (supplierList.hidden) { openSuppliers(''); return; }
         const active = supplierList.querySelector('.picker-option.active');
         const found = supplierList.querySelectorAll('.picker-option:not(.add):not(.quiet)');
-        if (active) pickSupplier(active.dataset.value);
-        else if (found.length === 1) pickSupplier(found[0].dataset.value);
+        if (active) active.click();
+        else if (found.length === 1) found[0].click();
       } else if (ev.key === 'Escape' && !supplierList.hidden) {
         ev.preventDefault();
         supplierInput.blur();
@@ -2537,7 +2555,7 @@
       field('new_supplier_bank_account', 'Account number', input('new_supplier_bank_account', { inputmode: 'numeric', autocomplete: 'off' })),
     ]);
     paintSupplier();
-    const supplierField = field('supplier_id', 'Supplier', h('div.picker', {}, [supplierInput, supplierList, supplierNote, newSupplierBox]));
+    const supplierField = field('supplier_id', 'Supplier', h('div.picker', {}, [supplierInput, addSupplierLink, supplierList, supplierNote, newSupplierBox]));
 
     /** Creates the typed-in supplier first, then the expense can point at it. */
     async function createSupplierFromForm() {
