@@ -1523,8 +1523,8 @@
   function reportPaymentPanel(e) {
     return confirmPanel({
       open: 'Something wrong with this payment? Report it', danger: true, required: true,
-      intro: 'For example the money went to the wrong account, the amount is wrong, or nothing arrived. The accountant and the owners are told at once.',
-      label: 'What is wrong? (required)', placeholder: 'e.g. Paid to the Ho Chi Minh branch, but the invoice is from the Hanoi branch',
+      intro: 'The accountant and the owners are told at once.',
+      label: 'What is wrong? (required)', placeholder: 'e.g. Paid to the wrong account',
       confirm: 'Report the problem',
       run: async function (reason) {
         const res = await Api.call('reportPayment', { id: e.expense_id, reason: reason });
@@ -1541,8 +1541,8 @@
   function resolvePaymentPanel(e) {
     return confirmPanel({
       open: 'Sorted out? Close the payment problem', required: true,
-      intro: 'Write how it was sorted out, for example the supplier moved the money, or it was refunded. If the payment was recorded wrongly here, void it and record it again first.',
-      label: 'How was it sorted out? (required)', placeholder: 'e.g. The supplier moved the money to their Hanoi account on 14 Oct',
+      intro: 'Recorded wrongly? Void the payment and record it again first.',
+      label: 'How was it sorted out? (required)', placeholder: 'e.g. Refunded on 14 Oct',
       confirm: 'Close the problem',
       run: async function (note) {
         const res = await Api.call('resolvePayment', { id: e.expense_id, note: note });
