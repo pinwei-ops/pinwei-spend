@@ -1504,18 +1504,7 @@
         afterAction(res, 'Closed ' + e.expense_id);
       },
     }));
-    wrap.appendChild(confirmPanel({
-      open: 'Something is wrong? Report it', danger: true, required: true,
-      intro: 'For example the goods did not arrive, the amount is different, or the receipt is wrong. The accountant and the owners are told; the item stays open.',
-      label: 'What is wrong? (required)', placeholder: 'e.g. only 8 of 10 bags of ice arrived',
-      confirm: 'Report the problem',
-      run: async function (note) {
-        const res = await Api.call('postCheck', { id: e.expense_id, note: note, problem: true });
-        state.detail = null;
-        toast('Problem reported for ' + res.expense.expense_id, 'ok');
-        renderExpense(e.expense_id);
-      },
-    }));
+    // Something wrong with it? One button for every payment: "Something wrong with this payment? Report it", under Payments.
     return wrap;
   }
 
@@ -1524,7 +1513,7 @@
     return confirmPanel({
       open: 'Something wrong with this payment? Report it', danger: true, required: true,
       intro: 'The accountant and the owners are told at once.',
-      label: 'What is wrong? (required)', placeholder: 'e.g. Paid to the wrong account',
+      label: 'What is wrong? (required)', placeholder: 'e.g. Paid to the wrong account, or the goods did not arrive',
       confirm: 'Report the problem',
       run: async function (reason) {
         const res = await Api.call('reportPayment', { id: e.expense_id, reason: reason });
