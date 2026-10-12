@@ -6,7 +6,7 @@
     user: null,
     ref: null,
     limits: null,
-    views: { mine: [], to_approve: [], to_pay: [], to_check: [] },
+    views: { mine: [], to_approve: [], to_pay: [], to_check: [], to_fix: [] },
     detail: null,   // last expense opened, reused by the edit form
     cash: null,     // petty cash book, loaded when its tab is opened
   };
@@ -227,6 +227,7 @@
         ]),
         e.status === 'NEEDS_INFO' && e.info_request ? h('div.item-note', { text: 'Requested: ' + e.info_request }) : null,
         e.status === 'REJECTED' && e.rejection_reason ? h('div.item-note.bad', { text: 'Rejected: ' + e.rejection_reason }) : null,
+        e.payment_problem ? h('div.item-note.bad', { text: 'Payment problem · ' + e.payment_problem }) : null,
       ]),
     ]);
   }
@@ -394,7 +395,7 @@
 
     // Tabs by role; queues come first because they are someone's job.
     const tabDefs = [];
-    if (PAYER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'pay', label: 'To pay', count: state.views.to_pay.length });
+    if (PAYER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'pay', label: 'To pay', count: state.views.to_pay.length + (state.views.to_fix || []).length });
     if (APPROVER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'approve', label: 'To approve', count: state.views.to_approve.length + (state.views.to_check || []).length });
     tabDefs.push({ key: 'mine', label: tabDefs.length ? 'Mine' : 'My expenses', count: byStatus(['NEEDS_INFO']).length });
     if (ALL_VIEW_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'all', label: role === 'OUTLET_MANAGER' ? 'Outlet' : 'All', count: 0 });
@@ -466,6 +467,7 @@
           { value: overdueN, label: 'Overdue', alert: overdueN > 0 },
           { value: partialN, label: 'Partially paid' },
         ]),
+        section('Payment problems to sort out', state.views.to_fix || [], { showSubmitter: true }),
         listControls(showFilter(payShow, [
           ['', 'Everything to pay (' + q.length + ')'],
           ['APPROVED', 'Approved, nothing paid yet (' + (q.length - partialN) + ')'],
@@ -1138,6 +1140,7 @@
     PAY_FULL: 'Paid in full', PAY_PARTIAL: 'Partial payment',
     REVIEW_REQUEST: 'Accountant asked for a review', ACCOUNTANT_REQUEST_INFO: 'Accountant asked for more info', PAY_VOID: 'Payment record voided',
     POST_CHECK_PROBLEM: 'Problem reported at the cash check', SYSTEM_CLEAR_DEMO: 'Demo data cleared',
+    PAYMENT_PROBLEM: 'Problem reported with the payment', PAYMENT_PROBLEM_CLOSED: 'Payment problem closed',
   };
 
   // The same words as on the form and the payment button.
@@ -1158,7 +1161,7 @@
       if (last && last.at === t.at && last.action === t.action) { if (t.field) last.fields.push(t); return; }
       lines.push({ at: t.at, by: t.by, action: t.action, fields: t.field ? [t] : [] });
     });
-    const isReason = function (f) { return ['info_request', 'rejection_reason', 'payment', 'cancel_reason', 'post_check_note', 'post_check_problem', 'review_request', 'void', 'void_reason'].indexOf(f.field) !== -1; };
+    const isReason = function (f) { return ['info_request', 'rejection_reason', 'payment', 'cancel_reason', 'post_check_note', 'post_check_problem', 'review_request', 'void', 'void_reason', 'payment_problem', 'payment_problem_closed'].indexOf(f.field) !== -1; };
     return h('ol.timeline', {}, lines.map(function (l) {
       const note = l.fields.filter(isReason).map(function (f) {
         if (f.field !== 'payment' && f.field !== 'void') return '"' + f.value + '"';
@@ -1179,7 +1182,7 @@
   // Photos of the last expenses opened (they don't change once uploaded).
   const filesCache = {};
   function knownItem(id) {
-    const lists = ['to_approve', 'to_pay', 'to_check', 'mine', 'all'];
+    const lists = ['to_approve', 'to_pay', 'to_check', 'to_fix', 'mine', 'all'];
     for (let i = 0; i < lists.length; i++) {
       const hit = (state.views[lists[i]] || []).find(function (x) { return x.expense_id === id; });
       if (hit) return hit;
@@ -1298,6 +1301,8 @@
       e.can.postCheck ? postCheckPanel(e) : null,
       e.payments && e.payments.length ? h('h2.section-title', { text: 'Payments' }) : null,
       e.payments && e.payments.length ? h('div.list.single', {}, e.payments.map(function (p) { return paymentCard(p, e); })) : null,
+      e.can.resolvePayment ? resolvePaymentPanel(e) : null,
+      e.can.reportPayment ? reportPaymentPanel(e) : null,
       e.can.edit ? h('a.btn' + (e.status === 'NEEDS_INFO' ? '.btn-primary.btn-big' : ''), { href: '#/edit/' + encodeURIComponent(e.expense_id) },
         [e.status === 'NEEDS_INFO' ? 'Edit and resubmit' : 'Edit']) : null,
       e.can.cancel ? cancelPanel(e) : null,
@@ -1512,6 +1517,42 @@
       },
     }));
     return wrap;
+  }
+
+  /** After the money moved: the submitter (or an owner) says the payment went wrong. The expense keeps its status. */
+  function reportPaymentPanel(e) {
+    return confirmPanel({
+      open: 'Something wrong with this payment? Report it', danger: true, required: true,
+      intro: 'For example the money went to the wrong account, the amount is wrong, or nothing arrived. The accountant and the owners are told at once.',
+      label: 'What is wrong? (required)', placeholder: 'e.g. Paid to the Ho Chi Minh branch, but the invoice is from the Hanoi branch',
+      confirm: 'Report the problem',
+      run: async function (reason) {
+        const res = await Api.call('reportPayment', { id: e.expense_id, reason: reason });
+        if (res.expense.submitted_by === state.user.userId) upsert('mine', res.expense);
+        else if (PAYER_ROLES.indexOf(state.user.role) !== -1) upsert('to_fix', res.expense);
+        state.detail = null;
+        toast('Problem reported for ' + res.expense.expense_id, 'ok');
+        renderExpense(e.expense_id);
+      },
+    });
+  }
+
+  /** The accountant closes a reported payment problem by writing how it was sorted out. */
+  function resolvePaymentPanel(e) {
+    return confirmPanel({
+      open: 'Sorted out? Close the payment problem', required: true,
+      intro: 'Write how it was sorted out, for example the supplier moved the money, or it was refunded. If the payment was recorded wrongly here, void it and record it again first.',
+      label: 'How was it sorted out? (required)', placeholder: 'e.g. The supplier moved the money to their Hanoi account on 14 Oct',
+      confirm: 'Close the problem',
+      run: async function (note) {
+        const res = await Api.call('resolvePayment', { id: e.expense_id, note: note });
+        removeFrom('to_fix', e.expense_id);
+        if (res.expense.submitted_by === state.user.userId) upsert('mine', res.expense);
+        state.detail = null;
+        toast('Payment problem closed for ' + res.expense.expense_id, 'ok');
+        go('/');
+      },
+    });
   }
 
   /** Accountant: "this looks wrong" → back to whoever approved it (the owners if nobody did) before anything is paid. */
