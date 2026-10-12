@@ -96,12 +96,19 @@
   // One or two words for tiles and lists; the full wording from the Sheet is the "Covers:" line.
   const CATEGORY_SHORT = {
     FOOD: 'Food & drinks', PACKAGING: 'Packaging', SUPPLIES: 'Supplies', GAS: 'Gas', TRANSPORT: 'Transport',
-    MAINTENANCE: 'Repairs', EQUIPMENT: 'Equipment', UTILITIES: 'Utilities', RENT: 'Rent', STAFF: 'Staff costs',
+    MAINTENANCE: 'Repairs', EQUIPMENT: 'Equipment', UTILITIES: 'Utilities', RENT: 'Rent', PREMISES: 'Rent & utilities', STAFF: 'Staff costs',
     MARKETING: 'Marketing', GIFTS: 'Gifts', OFFICE: 'Office & fees', SECURITY_DEPOSIT: 'Deposit', OTHER: 'Other',
   };
   // Tile order; codes added later in the Sheet go just before Other.
   const CATEGORY_ORDER = ['FOOD', 'PACKAGING', 'SUPPLIES', 'GAS', 'TRANSPORT', 'MAINTENANCE', 'EQUIPMENT',
-    'UTILITIES', 'RENT', 'STAFF', 'MARKETING', 'GIFTS', 'OFFICE', 'SECURITY_DEPOSIT', 'OTHER'];
+    'PREMISES', 'UTILITIES', 'RENT', 'STAFF', 'MARKETING', 'GIFTS', 'OFFICE', 'SECURITY_DEPOSIT', 'OTHER'];
+  // Rent and Utilities became one tile. The old codes stay readable on older expenses, and
+  // stay on the form until the Sheet has the new category (setupSheet adds it).
+  const MERGED_CATEGORIES = { RENT: 'PREMISES', UTILITIES: 'PREMISES' };
+  function mergedAway(code) {
+    const into = MERGED_CATEGORIES[code];
+    return Boolean(into) && state.ref.categories.some(function (c) { return c.value === into; });
+  }
   // Kitchen staff (requesters outside head office) never pay these, so they don't see them.
   const HQ_ONLY_CATEGORIES = ['RENT', 'OFFICE', 'SECURITY_DEPOSIT'];
   function categoryShort(code) {
@@ -112,7 +119,7 @@
     const kitchen = state.user.role === 'REQUESTER' && state.user.outletCode !== 'HQ';
     const rank = function (code) { const i = CATEGORY_ORDER.indexOf(code); return i === -1 ? CATEGORY_ORDER.length - 1.5 : i; };
     return state.ref.categories
-      .filter(function (c) { return !kitchen || HQ_ONLY_CATEGORIES.indexOf(c.value) === -1 || c.value === current; })
+      .filter(function (c) { return c.value === current || (!mergedAway(c.value) && (!kitchen || HQ_ONLY_CATEGORIES.indexOf(c.value) === -1)); })
       .sort(function (a, b) { return rank(a.value) - rank(b.value); });
   }
 
@@ -822,7 +829,7 @@
       let category = '';
       const catGrid = h('div.cat-grid', { role: 'radiogroup', 'aria-label': 'Category' });
       const paintCats = function () { catGrid.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.value === category); b.setAttribute('aria-checked', b.dataset.value === category); }); };
-      state.ref.categories.slice().sort(function (a, b) {
+      state.ref.categories.filter(function (c) { return !mergedAway(c.value); }).sort(function (a, b) {
         const r = function (x) { const i = CATEGORY_ORDER.indexOf(x.value); return i === -1 ? 99 : i; };
         return r(a) - r(b);
       }).forEach(function (c) {
@@ -2349,7 +2356,7 @@
     }
     tileCategories(values.expense_category).forEach(function (c) {
       catGrid.appendChild(h('button.chip-btn', { type: 'button', role: 'radio', 'data-value': c.value, text: categoryShort(c.value), title: c.label,
-        onclick: function () { set('expense_category', c.value); paintCats(); } }));
+        onclick: function () { set('expense_category', c.value); paintCats(); supplierCategoryChanged(); } }));
     });
     paintCats();
     const catField = field('expense_category', 'Category', h('div', {}, [catGrid, catHint]));
@@ -2407,7 +2414,121 @@
 
     // --- who gets paid (supplier / someone else / me)
     const payeeHint = h('p.hint');
-    const supplierSelect = select('supplier_id', state.ref.suppliers.concat([{ value: NEW_SUPPLIER, label: '+ Add a new supplier…' }]), 'Not listed / none');
+    // The supplier is picked from a list that can be searched by typing (with or without accents).
+    // Categories named in config (supplier_filter_categories) list only their own suppliers.
+    const ownListCategories = (state.limits && state.limits.supplierCategories) || [];
+    const plainText = function (s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd').toLowerCase(); };
+    const ADD_SUPPLIER_LABEL = '+ Add a new supplier…';
+    const SUPPLIER_PLACEHOLDER = 'Search or choose a supplier';
+    const supplierInput = h('input.input.picker-input', { type: 'text', role: 'combobox', autocomplete: 'off', spellcheck: 'false',
+      'aria-expanded': 'false', 'aria-autocomplete': 'list', 'aria-controls': 'supplier_list', placeholder: SUPPLIER_PLACEHOLDER });
+    const supplierList = h('div.picker-list', { id: 'supplier_list', role: 'listbox', 'aria-label': 'Suppliers', hidden: true });
+    const supplierNote = h('p.hint', { hidden: true });
+    function supplierChoices() {
+      const cat = values.expense_category;
+      if (ownListCategories.indexOf(cat) === -1) return state.ref.suppliers;
+      return state.ref.suppliers.filter(function (s) { return s.defaultCategory === cat || s.value === values.supplier_id; });
+    }
+    function supplierLabel() {
+      if (values.supplier_id === NEW_SUPPLIER) return ADD_SUPPLIER_LABEL;
+      const s = state.ref.suppliers.find(function (x) { return x.value === values.supplier_id; });
+      return s ? s.label : '';
+    }
+    function paintSupplier() {
+      if (document.activeElement !== supplierInput) supplierInput.value = supplierLabel();
+      newSupplierBox.hidden = values.supplier_id !== NEW_SUPPLIER;
+      const own = ownListCategories.indexOf(values.expense_category) !== -1;
+      supplierNote.textContent = own ? 'Only the suppliers for "' + categoryShort(values.expense_category) + '" are listed.' : '';
+      supplierNote.hidden = !own;
+    }
+    function closeSuppliers() {
+      supplierList.hidden = true;
+      supplierInput.setAttribute('aria-expanded', 'false');
+      supplierInput.removeAttribute('aria-activedescendant');
+    }
+    function openSuppliers(query) {
+      const words = plainText(query).split(/\s+/).filter(Boolean);
+      const rows = words.length ? [] : [{ value: '', label: 'Not listed / none', cls: '.quiet' }];
+      const matches = supplierChoices().filter(function (s) {
+        const text = plainText(s.label);
+        return words.every(function (w) { return text.indexOf(w) !== -1; });
+      });
+      matches.forEach(function (s) { rows.push({ value: s.value, label: s.label }); });
+      rows.push({ value: NEW_SUPPLIER, label: ADD_SUPPLIER_LABEL, cls: '.add' });
+      supplierList.textContent = '';
+      if (words.length && !matches.length) supplierList.appendChild(h('p.picker-empty', { text: 'No supplier matches "' + String(query).trim() + '".' }));
+      rows.forEach(function (r, i) {
+        supplierList.appendChild(h('div.picker-option' + (r.cls || ''), { role: 'option', id: 'supplier_opt_' + i, 'data-value': r.value,
+          'aria-selected': String(r.value === (values.supplier_id || '')), text: r.label, onclick: function () { pickSupplier(r.value); } }));
+      });
+      supplierList.hidden = false;
+      supplierList.scrollTop = 0;
+      supplierInput.setAttribute('aria-expanded', 'true');
+      supplierInput.removeAttribute('aria-activedescendant');
+    }
+    function pickSupplier(id) {
+      set('supplier_id', id);
+      supplierInput.blur();   // closes the list and shows the name
+      // A regular supplier suggests its usual category (one tap less for daily deliveries).
+      const s = state.ref.suppliers.find(function (x) { return x.value === id; });
+      if (s && s.defaultCategory && !values.expense_category && catGrid.querySelector('[data-value="' + s.defaultCategory + '"]')) {
+        set('expense_category', s.defaultCategory);
+        paintCats();
+      }
+      paintSupplier();
+    }
+    /** Another category was tapped: a supplier that is not on that category's own list is taken out. */
+    function supplierCategoryChanged() {
+      const cat = values.expense_category;
+      const s = state.ref.suppliers.find(function (x) { return x.value === values.supplier_id; });
+      if (s && ownListCategories.indexOf(cat) !== -1 && s.defaultCategory !== cat) {
+        values.supplier_id = '';
+        if (!editing) saveDraft(values);
+        checkRequired();
+      }
+      closeSuppliers();
+      paintSupplier();
+    }
+    function moveSupplier(step) {
+      const options = [].slice.call(supplierList.querySelectorAll('.picker-option'));
+      if (!options.length) return;
+      const now = options.findIndex(function (o) { return o.classList.contains('active'); });
+      const next = Math.max(0, Math.min(options.length - 1, now === -1 ? (step > 0 ? 0 : options.length - 1) : now + step));
+      options.forEach(function (o, i) { o.classList.toggle('active', i === next); });
+      supplierInput.setAttribute('aria-activedescendant', options[next].id);
+      options[next].scrollIntoView({ block: 'nearest' });
+    }
+    // While the box is in use it is empty for typing; the supplier already chosen shows as its grey text.
+    supplierInput.addEventListener('focus', function () {
+      supplierInput.placeholder = supplierLabel() || SUPPLIER_PLACEHOLDER;
+      supplierInput.value = '';
+      openSuppliers('');
+    });
+    supplierInput.addEventListener('click', function () { if (supplierList.hidden) openSuppliers(supplierInput.value); });
+    supplierInput.addEventListener('input', function () { openSuppliers(supplierInput.value); });
+    supplierInput.addEventListener('blur', function () {
+      closeSuppliers();
+      supplierInput.placeholder = SUPPLIER_PLACEHOLDER;
+      supplierInput.value = supplierLabel();
+    });
+    supplierInput.addEventListener('keydown', function (ev) {
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        if (supplierList.hidden) openSuppliers(''); else moveSupplier(ev.key === 'ArrowDown' ? 1 : -1);
+      } else if (ev.key === 'Enter') {
+        ev.preventDefault();   // never submits the form from here
+        if (supplierList.hidden) { openSuppliers(''); return; }
+        const active = supplierList.querySelector('.picker-option.active');
+        const found = supplierList.querySelectorAll('.picker-option:not(.add):not(.quiet)');
+        if (active) pickSupplier(active.dataset.value);
+        else if (found.length === 1) pickSupplier(found[0].dataset.value);
+      } else if (ev.key === 'Escape' && !supplierList.hidden) {
+        ev.preventDefault();
+        supplierInput.blur();
+      }
+    });
+    // A tap in the list must not take the cursor out of the box first (that would close the list).
+    supplierList.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
     const newSupplierBox = h('div.payee-other', { hidden: true }, [
       h('p.hint', { text: 'New suppliers need an owner\u2019s approval before the accountant can pay into their account.' }),
       field('new_supplier_name', 'Supplier name', input('new_supplier_name', { autocomplete: 'off' })),
@@ -2415,17 +2536,8 @@
       field('new_supplier_bank_name', 'Bank', input('new_supplier_bank_name', { autocomplete: 'off' })),
       field('new_supplier_bank_account', 'Account number', input('new_supplier_bank_account', { inputmode: 'numeric', autocomplete: 'off' })),
     ]);
-    supplierSelect.addEventListener('change', function () {
-      newSupplierBox.hidden = supplierSelect.value !== NEW_SUPPLIER;
-      // A regular supplier suggests its usual category (one tap less for daily deliveries).
-      const s = state.ref.suppliers.find(function (x) { return x.value === supplierSelect.value; });
-      if (s && s.defaultCategory && !values.expense_category && catGrid.querySelector('[data-value="' + s.defaultCategory + '"]')) {
-        set('expense_category', s.defaultCategory);
-        paintCats();
-      }
-    });
-    newSupplierBox.hidden = values.supplier_id !== NEW_SUPPLIER;
-    const supplierField = field('supplier_id', 'Supplier', h('div', {}, [supplierSelect, newSupplierBox]));
+    paintSupplier();
+    const supplierField = field('supplier_id', 'Supplier', h('div.picker', {}, [supplierInput, supplierList, supplierNote, newSupplierBox]));
 
     /** Creates the typed-in supplier first, then the expense can point at it. */
     async function createSupplierFromForm() {
@@ -2444,11 +2556,9 @@
         const name = dup.existingName || values.new_supplier_name;
         if (!state.ref.suppliers.some(function (s) { return s.value === dup.existingId; })) {
           state.ref.suppliers.push({ value: dup.existingId, label: name });
-          supplierSelect.insertBefore(h('option', { value: dup.existingId, text: name }), supplierSelect.querySelector('option[value="' + NEW_SUPPLIER + '"]'));
         }
         values.supplier_id = dup.existingId;
-        supplierSelect.value = dup.existingId;
-        newSupplierBox.hidden = true;
+        paintSupplier();
         saveDraft(values);
         const stop = new Error('This supplier is already in the list: ' + name + '. It is now selected. Check it, then press Submit again.');
         stop.code = 'VALIDATION';

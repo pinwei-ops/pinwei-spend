@@ -243,6 +243,17 @@ textarea.input { resize: vertical; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .grid2 .money { font-size: 1rem; }
 .payee-block { display: flex; flex-direction: column; gap: 12px; }
+/* Supplier picker: a box to type in, with the matching suppliers listed under it. */
+.picker { display: flex; flex-direction: column; gap: 8px; }
+.picker-list { max-height: 268px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--card); overscroll-behavior: contain; }
+.picker-option { display: flex; align-items: center; min-height: 44px; padding: 8px 12px; cursor: pointer; line-height: 1.3; }
+.picker-option + .picker-option, .picker-empty + .picker-option { border-top: 1px solid var(--line); }
+.picker-option:hover, .picker-option.active { background: var(--hover); }
+.picker-option.active { box-shadow: inset 3px 0 0 var(--accent); }
+.picker-option[aria-selected="true"] { background: var(--navy-soft); font-weight: 600; }
+.picker-option.quiet { color: var(--muted); }
+.picker-option.add { color: var(--accent); font-weight: 600; }
+.picker-empty { margin: 0; padding: 12px; color: var(--muted); font-size: .9rem; }
 .payee-other { display: flex; flex-direction: column; gap: 12px; padding: 12px; border: 1px dashed var(--line); border-radius: var(--radius); background: var(--hover); }
 
 .preview { display: flex; flex-direction: column; gap: 8px; }
