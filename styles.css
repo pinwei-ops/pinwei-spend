@@ -307,6 +307,7 @@ details.more-inline[open] > .input { margin-top: 6px; }
 .overlay { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgba(10, 12, 30, .55); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
 .overlay-card { width: 100%; max-width: 360px; padding: 22px; border-radius: var(--radius); background: var(--card); text-align: center; box-shadow: var(--shadow); }
 .signin-slot { display: flex; justify-content: center; min-height: 44px; }
+.signin-privacy { color: var(--muted); font-size: .85rem; }
 .signin-logo { width: 96px; height: 96px; border-radius: 16px; background: #fff; padding: 6px; border: 1px solid var(--line); }
 .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 30; width: max-content; text-align: center; transform: translate(-50%, 20px); max-width: calc(100% - 32px); padding: 12px 18px; border-radius: 999px; background: var(--fg); color: var(--bg); opacity: 0; transition: .25s; box-shadow: var(--shadow); font-weight: 500; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }

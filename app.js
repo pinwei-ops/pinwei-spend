@@ -200,6 +200,7 @@
   const allFilter = { outlet: '', status: 'OPEN', q: '' };
   let payShow = '';           // "Show" dropdown on the Pay tab
   let mineShow = '';          // "Show" dropdown on the Mine tab
+  let doneShow = '';          // "Show" dropdown on a requester's Done tab
   let homeTab = null;
 
   /** Replaces or inserts an expense in a view list (keeps local state fresh without a reload). */
@@ -402,6 +403,12 @@
       const cashTab = { key: 'cash', label: 'Cash', count: state.cash ? state.cash.pending.filter(function (x) { return x.can_confirm; }).length : 0 };
       if (state.user.petty === 'KEEPER' || state.user.petty === 'FUNDER') tabDefs.unshift(cashTab); else tabDefs.push(cashTab);
     }
+    // Someone with only their own expenses gets them as two tabs: what is still open, and what is done.
+    const solo = tabDefs.length === 1;
+    if (solo) {
+      tabDefs[0].label = 'Open';
+      tabDefs.push({ key: 'done', label: 'Done', count: 0 });
+    }
     if (tabDefs.length >= 4) {                      // phone width: keep tab labels on one line
       const short = { pay: 'Pay', approve: 'Approve' };
       tabDefs.forEach(function (t) { if (short[t.key]) t.label = short[t.key]; });
@@ -470,6 +477,24 @@
         q.length && payShow !== 'PAID' ? h('button.btn', { type: 'button', text: 'Export list for bank transfers (CSV)', onclick: exportToPay }) : null,
         monthExportRow(),
       ];
+    } else if (homeTab === 'done') {
+      const DONE_SHOW = { PAID: ['Paid', ['PAID', 'CLOSED']], REJECTED: ['Rejected', ['REJECTED']], CANCELLED: ['Cancelled', ['CANCELLED']] };
+      const done = byStatus(['PAID', 'CLOSED', 'REJECTED', 'CANCELLED']);
+      if (!DONE_SHOW[doneShow]) doneShow = '';
+      body = [
+        stats([
+          { value: byStatus(DONE_SHOW.PAID[1]).length, label: 'Paid', brand: true },
+          { value: byStatus(DONE_SHOW.REJECTED[1]).length, label: 'Rejected' },
+          { value: byStatus(DONE_SHOW.CANCELLED[1]).length, label: 'Cancelled' },
+        ]),
+        h('a.btn.btn-primary.btn-big', { href: '#/new' }, ['+ New expense']),
+        done.length ? listControls(showFilter(doneShow, [['', 'Everything done (' + done.length + ')']].concat(Object.keys(DONE_SHOW).map(function (k) {
+          return [k, DONE_SHOW[k][0] + ' (' + byStatus(DONE_SHOW[k][1]).length + ')'];
+        })), function (v) { doneShow = v; })) : null,
+        DONE_SHOW[doneShow]
+          ? section(DONE_SHOW[doneShow][0], byStatus(DONE_SHOW[doneShow][1]), { showEmpty: true, empty: 'Nothing here.' })
+          : section('Done', done, { showEmpty: true, empty: 'Nothing is done yet.' }),
+      ];
     } else {
       body = [
         stats([
@@ -487,8 +512,13 @@
         REJECTED: ['Rejected', ['REJECTED']],
         CANCELLED: ['Cancelled', ['CANCELLED']],
       };
-      if (mine.length) {
-        body.push(listControls(showFilter(mineShow, [['', 'Everything (' + mine.length + ')']].concat(Object.keys(MINE_SHOW).map(function (k) {
+      // With the Done tab next to it (solo), this list holds only what is still open.
+      const openStatuses = ['DRAFT', 'NEEDS_INFO', 'PENDING_APPROVAL', 'APPROVED', 'PARTIAL'];
+      const showKeys = Object.keys(MINE_SHOW).filter(function (k) { return !solo || openStatuses.indexOf(MINE_SHOW[k][1][0]) !== -1; });
+      if (showKeys.indexOf(mineShow) === -1) mineShow = '';
+      const listed = solo ? byStatus(openStatuses) : mine;
+      if (listed.length) {
+        body.push(listControls(showFilter(mineShow, [['', (solo ? 'Everything open (' : 'Everything (') + listed.length + ')']].concat(showKeys.map(function (k) {
           return [k, MINE_SHOW[k][0] + ' (' + byStatus(MINE_SHOW[k][1]).length + ')'];
         })), function (v) { mineShow = v; })));
       }
@@ -498,7 +528,7 @@
         body.push(
           section('Needs your info', byStatus(['NEEDS_INFO'])),
           section('In progress', byStatus(['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'PARTIAL']), { showEmpty: true, empty: 'Nothing in progress.' }),
-          section('Done', byStatus(['PAID', 'CLOSED', 'REJECTED', 'CANCELLED']), { collapsed: true })
+          solo ? null : section('Done', byStatus(['PAID', 'CLOSED', 'REJECTED', 'CANCELLED']), { collapsed: true })
         );
       }
     }
@@ -2873,6 +2903,7 @@
       h('h1.title', { text: 'Pin Wei Spend' }),
       h('p.sub', { text: message || 'Sign in with your Google account to submit and track expenses.' }),
       slot,
+      h('a.link.signin-privacy', { href: 'privacy.html', text: 'Privacy notice' }),
     ])]));
     Api.renderButton(slot);
   }
