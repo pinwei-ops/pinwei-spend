@@ -404,11 +404,13 @@
       const cashTab = { key: 'cash', label: 'Cash', count: state.cash ? state.cash.pending.filter(function (x) { return x.can_confirm; }).length : 0 };
       if (state.user.petty === 'KEEPER' || state.user.petty === 'FUNDER') tabDefs.unshift(cashTab); else tabDefs.push(cashTab);
     }
-    // Someone with only their own expenses gets them as two tabs: what is still open, and what is done.
-    const solo = tabDefs.length === 1;
+    // Someone who only follows their own expenses (a requester; the cash keeper and funder too) gets them as two tabs:
+    // what is still open, and what is done. With a Cash tab next to it, the open one keeps the name "My expenses".
+    const solo = !tabDefs.some(function (t) { return t.key === 'pay' || t.key === 'approve' || t.key === 'all'; });
     if (solo) {
-      tabDefs[0].label = 'Open';
-      tabDefs.push({ key: 'done', label: 'Done', count: 0 });
+      const at = tabDefs.findIndex(function (t) { return t.key === 'mine'; });
+      if (tabDefs.length === 1) tabDefs[at].label = 'Open';
+      tabDefs.splice(at + 1, 0, { key: 'done', label: 'Done', count: 0 });
     }
     if (tabDefs.length >= 4) {                      // phone width: keep tab labels on one line
       const short = { pay: 'Pay', approve: 'Approve' };
