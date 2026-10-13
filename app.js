@@ -619,7 +619,7 @@
     const total = rows.reduce(function (sum, e) { return sum + (Number(e.amount_total) || 0); }, 0);
 
     const outletSel = h('select.input', { 'aria-label': 'Outlet', onchange: function () { allFilter.outlet = outletSel.value; shownMore = {}; renderHome(true); } },
-      [h('option', { value: '', text: 'All outlets' })].concat(outletCodes().map(function (c) { return h('option', { value: c, text: c }); })));
+      [h('option', { value: '', text: 'All outlets' })].concat(outletChoices().map(function (o) { return h('option', { value: o.value, text: o.label }); })));
     outletSel.value = allFilter.outlet;
     const statusSel = h('select.input', { 'aria-label': 'Status', onchange: function () { allFilter.status = statusSel.value; shownMore = {}; renderHome(true); } },
       [h('option', { value: 'OPEN', text: 'Open' }), h('option', { value: '', text: 'Every status' })]
@@ -653,10 +653,13 @@
     }), [part.more]);
   }
 
-  function outletCodes() {
-    const seen = {};
-    (state.views.all || []).forEach(function (e) { seen[e.outlet_code] = true; });
-    return Object.keys(seen).sort();
+  /** Every outlet the viewer may see, with or without expenses, plus any code left on old expenses. */
+  function outletChoices() {
+    const list = state.ref.outlets.map(function (o) { return { value: o.value, label: o.label }; });
+    (state.views.all || []).forEach(function (e) {
+      if (e.outlet_code && !list.some(function (o) { return o.value === e.outlet_code; })) list.push({ value: e.outlet_code, label: e.outlet_code });
+    });
+    return list;
   }
 
   // -------------------------------------------------------------- petty cash
