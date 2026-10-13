@@ -61,8 +61,12 @@ window.Api = (function () {
     if (overlayEl) return;
     overlayEl = document.createElement('div');
     overlayEl.className = 'overlay';
+    overlayEl.setAttribute('role', 'dialog');
+    overlayEl.setAttribute('aria-modal', 'true');
+    overlayEl.setAttribute('aria-label', 'Sign in again');
     const card = document.createElement('div');
     card.className = 'overlay-card';
+    card.tabIndex = -1;
     const p = document.createElement('p');
     p.textContent = message;
     const slot = document.createElement('div');
@@ -72,6 +76,7 @@ window.Api = (function () {
     overlayEl.appendChild(card);
     document.body.appendChild(overlayEl);
     google.accounts.id.renderButton(slot, { theme: 'filled_blue', size: 'large', shape: 'pill', text: 'signin_with' });
+    card.focus({ preventScroll: true });
   }
 
   function hideOverlay() {

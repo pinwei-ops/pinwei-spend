@@ -176,7 +176,7 @@
 
   function header() {
     return h('header.topbar', {}, [h('div.topbar-inner', {}, [
-      h('a.brand', { href: '#/' }, [h('img.brand-logo', { src: 'logo-96.png', alt: '' }), h('span', { text: 'Pin Wei Spend' })]),
+      h('a.brand', { href: '#/', 'aria-label': 'Pin Wei Spend, home' }, [h('img.brand-logo', { src: 'logo-96.png', alt: '' }), h('span', { text: 'Pin Wei Spend' })]),
       h('div.who', {}, [
         h('span.who-name', { text: state.user.name }),
         h('span.who-role', { text: label('role', state.user.role) }),
@@ -584,14 +584,14 @@
     });
     const total = rows.reduce(function (sum, e) { return sum + (Number(e.amount_total) || 0); }, 0);
 
-    const outletSel = h('select.input', { onchange: function () { allFilter.outlet = outletSel.value; shownMore = {}; renderHome(true); } },
+    const outletSel = h('select.input', { 'aria-label': 'Outlet', onchange: function () { allFilter.outlet = outletSel.value; shownMore = {}; renderHome(true); } },
       [h('option', { value: '', text: 'All outlets' })].concat(outletCodes().map(function (c) { return h('option', { value: c, text: c }); })));
     outletSel.value = allFilter.outlet;
-    const statusSel = h('select.input', { onchange: function () { allFilter.status = statusSel.value; shownMore = {}; renderHome(true); } },
+    const statusSel = h('select.input', { 'aria-label': 'Status', onchange: function () { allFilter.status = statusSel.value; shownMore = {}; renderHome(true); } },
       [h('option', { value: 'OPEN', text: 'Open' }), h('option', { value: '', text: 'Every status' })]
         .concat(state.ref.enums.filter(function (x) { return x.field === 'status'; }).map(function (x) { return h('option', { value: x.value, text: x.label }); })));
     statusSel.value = allFilter.status;
-    const search = h('input.input', { type: 'search', placeholder: 'Search ID, supplier, person…', value: allFilter.q });
+    const search = h('input.input', { type: 'search', 'aria-label': 'Search', placeholder: 'Search ID, supplier, person…', value: allFilter.q });
     search.addEventListener('change', function () { allFilter.q = search.value; shownMore = {}; renderHome(true); });
 
     // Timeline: what is overdue first, then grouped by submission day when sorted by date; one list otherwise.
@@ -778,7 +778,8 @@
     card.appendChild(h('div.item-mid', { text: 'From ' + x.recorded_by_name + ' · ' + fmtDate(x.entry_date) + (x.description ? ' · ' + x.description : '') }));
     card.appendChild(h('a.link', { href: '#/cash/' + encodeURIComponent(x.entry_id), text: x.entry_id }));
     if (!x.can_confirm) { card.appendChild(h('p.hint', { text: 'Waiting for the cash keeper to count it and confirm.' })); return card; }
-    const amount = moneyBox(String(x.amount));
+    const amount = moneyBox(String(x.amount), 'got_' + x.entry_id);
+    amount.input.setAttribute('aria-required', 'true');
     const err = h('p.error', { hidden: true });
     const btn = h('button.btn.btn-approve', { type: 'button', text: 'Received' });
     btn.addEventListener('click', async function () {
@@ -792,7 +793,7 @@
         if (res.cash) { state.cash = res.cash; if (onHome() && homeTab === 'cash') renderHome(true); } else loadCash(true);
       } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     });
-    card.appendChild(starLabel(h('label.label', { text: 'Amount you received' })));
+    card.appendChild(starLabel(h('label.label', { for: 'got_' + x.entry_id, text: 'Amount you received' })));
     card.appendChild(amount.el);
     let gotTouched = false;
     const checkGot = function () {
@@ -968,8 +969,21 @@
     const titles = { spend: 'Record a cash spend', deposit: 'Record a cash deposit', count: 'Count the cash' };
     const errs = {};
     const fieldBox = function (name, labelText, control, hint) {
-      errs[name] = h('p.error', { hidden: true });
-      return h('div.field', { 'data-field': name }, [labelText ? h('label.label', { text: labelText }) : null, control, hint ? h('p.hint', { text: hint }) : null, errs[name]]);
+      const id = 'cash_' + name;
+      errs[name] = h('p.error', { hidden: true, id: id + '_error' });
+      // Bind the label to the first real control inside (input/select/textarea), or name the group.
+      const target = control.matches('input,select,textarea') ? control : control.querySelector('input:not([type=file]),select,textarea');
+      if (target && !target.id) target.id = id;
+      if (target) target.setAttribute('aria-describedby', id + '_error');
+      if (!target && labelText && !control.getAttribute('aria-label')) { control.setAttribute('role', 'group'); control.setAttribute('aria-labelledby', id + '_label'); }
+      return h('div.field', { 'data-field': name }, [
+        labelText ? h(target ? 'label.label' : 'span.label', target ? { for: target.id, text: labelText } : { id: id + '_label', text: labelText }) : null,
+        control, hint ? h('p.hint', { text: hint }) : null, errs[name]]);
+    };
+    /** The control of a required field (its box, or its group of tiles), for aria-required and aria-invalid. */
+    const controlOf = function (name) {
+      const f = errs[name] && errs[name].parentNode;
+      return f ? f.querySelector('input:not([type=file]),select,textarea') || f.querySelector('[role=radiogroup]') : null;
     };
     const summary = h('div.error-summary', { role: 'alert', hidden: true });
     function showProblems(details) {
@@ -1067,7 +1081,7 @@
     });
     const reasonSel = h('select.input', {}, [h('option', { value: '', text: 'Choose a reason' })]
       .concat(state.ref.enums.filter(function (x) { return x.field === 'no_doc_reason' && x.value !== 'PURCHASE_NOT_ORDERED'; }).map(function (x) { return h('option', { value: x.value, text: x.label }); })));
-    const reasonNote = h('input.input', { maxlength: 300, placeholder: 'Reason (optional), e.g. street vendor' });
+    const reasonNote = h('input.input', { maxlength: 300, 'aria-label': 'Reason (optional)', placeholder: 'Reason (optional), e.g. street vendor' });
     reasonNote.hidden = true;
     reasonSel.addEventListener('change', function () { reasonNote.hidden = reasonSel.value !== 'OTHER'; touch('file'); });
     const noDoc = fieldBox('no_doc_reason', 'No receipt? Choose why', h('div.stack', {}, [reasonSel, reasonNote]));
@@ -1214,6 +1228,8 @@
     rules.forEach(function (r) {
       const lbl = errs[r[0]] && errs[r[0]].parentNode && errs[r[0]].parentNode.querySelector('.label');
       if (lbl) lbl.appendChild(h('span.req-star', { text: ' *', 'aria-hidden': 'true' }));
+      const c = controlOf(r[0]);
+      if (c) c.setAttribute('aria-required', 'true');
     });
     amount.input.addEventListener('input', function () { touch(kind === 'count' ? 'counted' : 'amount'); });
     note.addEventListener('input', function () { if (touchedC.description || note.value) touch('description'); });
@@ -1224,10 +1240,11 @@
       const missing = [];
       rules.forEach(function (r) {
         const p = errs[r[0]];
-        if (r[3]()) { if (p && p.dataset.required) { p.hidden = true; delete p.dataset.required; } return; }
+        const c = controlOf(r[0]);
+        if (r[3]()) { if (p && p.dataset.required) { p.hidden = true; delete p.dataset.required; if (c) c.removeAttribute('aria-invalid'); } return; }
         missing.push(r[1]);
         if (showAll) touchedC[r[0]] = true;
-        if (p && touchedC[r[0]]) { p.textContent = r[2]; p.hidden = false; p.dataset.required = '1'; }
+        if (p && touchedC[r[0]]) { p.textContent = r[2]; p.hidden = false; p.dataset.required = '1'; if (c) c.setAttribute('aria-invalid', 'true'); }
       });
       const over = overBalance();
       if (over && errs.amount) {
@@ -1284,7 +1301,7 @@
     });
     ready = true;
     validate();
-    mount(page([back, h('h1.title', { text: titles[kind] }), summary, h('section.form-section', {}, body.concat([errs._form])), missingLine, submit]));
+    mount(page([back, h('h1.title', { text: titles[kind] }), summary, h('section.form-section', {}, [h('p.hint', { text: REQUIRED_NOTE })].concat(body, [errs._form])), missingLine, submit]));
   }
 
   /** #/cash/<id>: one entry, its photo, and "cancel this entry". */
@@ -2071,7 +2088,7 @@
     const methodSelect = h('select.input', {}, state.ref.enums.filter(function (x) { return x.field === 'payment_method'; })
       .map(function (x) { return h('option', { value: x.value, text: x.label }); }));
     methodSelect.value = e.payee_type === 'OUTLET_CASH' ? 'CASH' : (e.payment_method || 'BANK_TRANSFER');
-    const sourceInput = h('input.input', { autocomplete: 'off', placeholder: 'e.g. VCB-8866 (optional)' });
+    const sourceInput = h('input.input', { autocomplete: 'off', 'aria-label': 'Paid from which account', placeholder: 'e.g. VCB-8866 (optional)' });
     const fileInput = h('input', { type: 'file', accept: 'image/*,application/pdf', hidden: true });
     const proofBox = h('div.preview');
     const attachProof = h('button.btn.btn-photo', { type: 'button', onclick: function () { fileInput.click(); } }, ['Attach transfer confirmation']);
@@ -2117,10 +2134,11 @@
       ];
       const missing = [];
       rules.forEach(function (r) {
-        if (r[3]) { r[2].hidden = true; return; }
+        const box = { amount: amountInput, date: dateInput }[r[0]];
+        if (r[3]) { r[2].hidden = true; if (box) box.removeAttribute('aria-invalid'); return; }
         missing.push(r[1]);
         if (showAll) payTouched[r[0]] = true;
-        if (payTouched[r[0]]) { r[2].textContent = r[4]; r[2].hidden = false; }
+        if (payTouched[r[0]]) { r[2].textContent = r[4]; r[2].hidden = false; if (box) box.setAttribute('aria-invalid', 'true'); }
       });
       proofLabel.firstChild.nodeValue = bank ? 'Transfer confirmation' : 'Receipt or photo (optional)';
       attachProof.textContent = bank ? 'Attach transfer confirmation' : 'Attach a photo';
@@ -2273,6 +2291,11 @@
     amountInput.id = 'pay_amount';
     dateInput.id = 'pay_date';
     methodSelect.id = 'pay_method';
+    amountErr.id = 'pay_amount_error';
+    dateErr.id = 'pay_date_error';
+    amountInput.setAttribute('aria-describedby', 'pay_amount_error');
+    dateInput.setAttribute('aria-describedby', 'pay_date_error');
+    [amountInput, dateInput, methodSelect].forEach(function (c) { c.setAttribute('aria-required', 'true'); });
     [h('div.field', {}, [proofLabel, fileInput, proofBox,
         attachProof, proofErr]),
       h('div.field', {}, [starLabel(h('label.label', { for: 'pay_amount', text: 'Amount paid' })), h('div.money-wrap', {}, [amountInput, h('span.suffix', { text: '₫' })]), words, hint, amountErr]),
@@ -2297,6 +2320,7 @@
 
   // ------------------------------------------------------------------- form
 
+  const REQUIRED_NOTE = 'Required fields are marked *.';
   const NEW_SUPPLIER = '__new__';
   const NEW_SUPPLIER_LABEL = 'New supplier (details below)';
   // Shown where a supplier is optional: the list stays short when one-time sellers are left out.
@@ -2423,9 +2447,13 @@
       const star = t.querySelector('.req-star');
       if (on && !star) t.appendChild(h('span.req-star', { text: ' *', 'aria-hidden': 'true' }));
       if (!on && star) star.remove();
-      const w = fieldEls[name];
-      const c = w && w.querySelector('#f_' + name);
+      const c = controlOf(name);
       if (c) { if (on) c.setAttribute('aria-required', 'true'); else c.removeAttribute('aria-required'); }
+    }
+    /** The field's own control (#f_name), or its group of choices. */
+    function controlOf(name) {
+      const w = fieldEls[name];
+      return w ? w.querySelector('#f_' + name) || w.querySelector('[role=radiogroup]') : null;
     }
     function checkRequired(showAll) {
       if (!formReady) return [];
@@ -2484,7 +2512,7 @@
       if (w) {
         w.classList.remove('has-error');
         w.querySelector('.error').hidden = true;
-        const c = w.querySelector('#f_' + name);
+        const c = controlOf(name);
         if (c) c.removeAttribute('aria-invalid');
       }
     }
@@ -2495,7 +2523,7 @@
       const p = w.querySelector('.error');
       p.textContent = message;
       p.hidden = false;
-      const c = w.querySelector('#f_' + name);
+      const c = controlOf(name);
       if (c) c.setAttribute('aria-invalid', 'true');
     }
 
@@ -2717,7 +2745,7 @@
     const catField = field('expense_category', 'Category', h('div', {}, [catGrid, catHint]));
 
     // --- send to
-    const sendToList = h('div.radios');
+    const sendToList = h('div.radios', { role: 'radiogroup', 'aria-label': 'Send to' });
     // Money back to the submitter, out of the cash box, or to a third party always needs an approver.
     const NEEDS_APPROVER = ['OTHER', 'SUBMITTER', 'OUTLET_CASH'];
     // Before sending straight to the accountant: what happens if something is wrong.
@@ -3009,7 +3037,7 @@
 
     // --- warnings panel + submit
     const formErrors = field('_form', null, h('div'));
-    const warnBox = h('div.warnbox', { hidden: true });
+    const warnBox = h('div.warnbox', { role: 'alert', hidden: true });
     const submitBtn = h('button.btn.btn-primary.btn-big', { type: 'submit', text: 'Submit' });
 
     async function submit(confirmWarnings) {
@@ -3106,6 +3134,7 @@
       h('h1.title', {}, editing
         ? [(existing.status === 'NEEDS_INFO' ? 'Edit and resubmit ' : 'Edit '), h('span.id-nowrap', { text: existing.expense_id })]
         : ['New expense']),
+      h('p.hint', { text: REQUIRED_NOTE }),
       restored ? h('p.hint', {}, ['Filled in from your unsent expense. ',
         h('button.link', { type: 'button', text: 'Start empty', onclick: function () { clearDraft(); renderForm(null); } })]) : null,
       errorSummary,
