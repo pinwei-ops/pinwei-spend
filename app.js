@@ -808,9 +808,9 @@
   function plainText(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd').toLowerCase(); }
 
   /**
-   * A supplier box that is searched by typing, as on the expense form but without "add a new supplier":
-   * a cash spend only points at a supplier already on the list.
-   * opts: { listId, category(): code, onPick(supplier or null) } → { el, value(), categoryChanged() }
+   * A supplier box that is searched by typing, as on the expense form (used by the cash spend form).
+   * opts: { listId, category(): code, onPick(supplier or null), onAddNew(typed name), below: element under the box }
+   * → { el, value(): id, '' or NEW_SUPPLIER, set(id), categoryChanged() }
    */
   function supplierPicker(opts) {
     const ownList = (state.limits && state.limits.supplierCategories) || [];
@@ -820,8 +820,9 @@
       'aria-expanded': 'false', 'aria-autocomplete': 'list', 'aria-controls': opts.listId, placeholder: PLACEHOLDER });
     const list = h('div.picker-list', { id: opts.listId, role: 'listbox', 'aria-label': 'Suppliers', hidden: true });
     const note = h('p.hint', { hidden: true });
+    const addLink = h('button.link.picker-add', { type: 'button', text: '+ Add a new supplier', onclick: function () { addNew(''); } });
     const find = function (id) { return state.ref.suppliers.find(function (x) { return x.value === id; }); };
-    const name = function () { const s = find(value); return s ? s.label : ''; };
+    const name = function () { const s = find(value); return value === NEW_SUPPLIER ? NEW_SUPPLIER_LABEL : s ? s.label : ''; };
     // Categories named in config (supplier_filter_categories) list only their own suppliers.
     function choices() {
       const cat = opts.category();
@@ -830,6 +831,7 @@
     }
     function paint() {
       if (document.activeElement !== input) input.value = name();
+      addLink.hidden = value === NEW_SUPPLIER;
       const cat = opts.category();
       const own = ownList.indexOf(cat) !== -1;
       note.textContent = own ? 'Only the suppliers for "' + categoryShort(cat) + '" are listed.' : '';
@@ -848,7 +850,13 @@
         if (words.every(function (w) { return text.indexOf(w) !== -1; })) rows.push({ value: s.value, label: s.label });
       });
       list.textContent = '';
-      if (!rows.length) list.appendChild(h('p.picker-empty', { text: 'No supplier matches "' + String(query).trim() + '". Leave this empty and name the seller under "What for?".' }));
+      const typed = String(query).trim();
+      if (!rows.length) {
+        // Nothing found: the typed name can go straight into the new-supplier form.
+        list.appendChild(h('p.picker-empty', { text: 'No supplier matches "' + typed + '".' }));
+        list.appendChild(h('div.picker-option.add', { role: 'option', id: opts.listId + '_new', 'data-value': NEW_SUPPLIER, 'aria-selected': 'false',
+          text: '+ Add "' + typed + '" as a new supplier', onclick: function () { addNew(typed); } }));
+      }
       rows.forEach(function (r, i) {
         list.appendChild(h('div.picker-option' + (r.cls || ''), { role: 'option', id: opts.listId + '_' + i, 'data-value': r.value,
           'aria-selected': String(r.value === value), text: r.label, onclick: function () { pick(r.value); } }));
@@ -863,6 +871,12 @@
       input.blur();   // closes the list and shows the name
       paint();
       opts.onPick(find(id) || null);
+    }
+    function addNew(typed) {
+      value = NEW_SUPPLIER;
+      input.blur();
+      paint();
+      opts.onAddNew(typed);
     }
     function move(step) {
       const options = [].slice.call(list.querySelectorAll('.picker-option'));
@@ -886,7 +900,7 @@
         ev.preventDefault();
         if (list.hidden) { open(''); return; }
         const active = list.querySelector('.picker-option.active');
-        const found = list.querySelectorAll('.picker-option:not(.quiet)');
+        const found = list.querySelectorAll('.picker-option:not(.add):not(.quiet)');
         if (active) active.click();
         else if (found.length === 1) found[0].click();
       } else if (ev.key === 'Escape' && !list.hidden) {
@@ -897,8 +911,9 @@
     // A tap in the list must not take the cursor out of the box first (that would close the list).
     list.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
     return {
-      el: h('div.picker', {}, [input, list, note]),
+      el: h('div.picker', {}, [input, addLink, list, note, opts.below]),
       value: function () { return value; },
+      set: function (id) { value = id; paint(); },
       /** Another category was tapped: a supplier that is not on that category's own list is taken out. */
       categoryChanged: function () {
         const s = find(value);
@@ -1044,6 +1059,7 @@
     let body = [];
     let payloadOf;
     let action;
+    let beforeSave = null;      // work to finish before the entry is saved (a new supplier is created first)
     // Required fields: [name, short name, message, filled?]. A red * on each; the message shows
     // once the field was touched and left empty; Save waits until all are filled.
     let rules = [];
@@ -1062,13 +1078,55 @@
       });
       paintCats();
       // As on an expense: the supplier it was bought from, when it is one on the list (shown once the server keeps it).
+      const newName = h('input.input', { autocomplete: 'off', maxlength: 200, oninput: function () { touch('new_supplier_name'); } });
+      const newTax = h('input.input', { inputmode: 'numeric', autocomplete: 'off' });
+      const newBank = h('input.input', { autocomplete: 'off' });
+      const newAccount = h('input.input', { inputmode: 'numeric', autocomplete: 'off' });
+      const newBox = h('div.payee-other', { hidden: true }, [
+        h('p.hint', { text: ONE_TIME_SELLER }),
+        fieldBox('new_supplier_name', 'Supplier name', newName),
+        fieldBox('new_supplier_tax_id', 'Tax ID (MST)', newTax),
+        fieldBox('new_supplier_bank_name', 'Bank', newBank),
+        fieldBox('new_supplier_bank_account', 'Account number', newAccount),
+      ]);
       const supplier = state.limits && state.limits.pettySupplier ? supplierPicker({
         listId: 'cash_supplier_list',
+        below: newBox,
         category: function () { return category; },
         onPick: function (s) {       // a regular supplier suggests its usual category
+          newBox.hidden = true;
           if (s && s.defaultCategory && !category && catGrid.querySelector('[data-value="' + s.defaultCategory + '"]')) { category = s.defaultCategory; paintCats(); touch('expense_category'); }
+          validate();
+        },
+        onAddNew: function (typed) {  // a name typed in the search box is carried into the new-supplier form
+          if (typed && !newName.value.trim()) newName.value = typed;
+          newBox.hidden = false;
+          if (!typed) newName.focus();
+          validate();
         },
       }) : null;
+      // The new supplier is created first, then the entry points at it.
+      beforeSave = async function () {
+        if (!supplier || supplier.value() !== NEW_SUPPLIER) return;
+        try {
+          const res = await Api.call('createSupplier', { name: newName.value.trim(), tax_id: newTax.value, bank_name: newBank.value, bank_account: newAccount.value, default_category: category });
+          state.ref.suppliers.push(res.supplier);
+          supplier.set(res.supplier.value);
+          newBox.hidden = true;
+        } catch (err) {
+          const dup = err.details && err.details.find(function (d) { return d.existingId; });
+          if (!dup) throw err;
+          // Already in the list: nothing is saved. The existing supplier is selected, and the user checks it first.
+          const name = dup.existingName || newName.value.trim();
+          if (!state.ref.suppliers.some(function (s) { return s.value === dup.existingId; })) state.ref.suppliers.push({ value: dup.existingId, label: name });
+          supplier.set(dup.existingId);
+          newBox.hidden = true;
+          const stop = new Error('This supplier is already in the list: ' + name + '. It is now selected. Check it, then press Save again.');
+          stop.code = 'VALIDATION';
+          stop.details = [{ field: 'supplier_id', message: stop.message }];
+          throw stop;
+        }
+      };
       const outlet = h('select.input', {}, [h('option', { value: '', text: 'Choose the outlet' })]
         .concat(state.ref.outlets.map(function (o) { return h('option', { value: o.value, text: o.label }); })));
       note.placeholder = 'What was bought, and why in cash?';
@@ -1080,6 +1138,7 @@
         ['expense_category', 'Category', 'Choose a category. This field is required.', function () { return Boolean(category); }],
         ['description', 'What for', 'Write what it was for. This field is required.', function () { return Boolean(note.value.trim()); }],
         ['entry_date', 'Date', 'Choose the date. This field is required.', function () { return Boolean(date.value); }],
+        ['new_supplier_name', 'Supplier name', 'Enter the supplier name, or choose "Not listed / none".', function () { return !supplier || supplier.value() !== NEW_SUPPLIER || Boolean(newName.value.trim()); }],
       ];
       body = [
         fieldBox('amount', 'Amount', amount.el),
@@ -1173,6 +1232,7 @@
       try {
         if (preparing) { submit.textContent = 'Preparing photo…'; await preparing; }
         submit.textContent = 'Saving…';
+        if (beforeSave) await beforeSave();
         const payload = payloadOf();
         if (attachment && kind !== 'count') Object.assign(payload, await filePayload(attachment));
         if (extras.length && kind !== 'count') {
@@ -2214,6 +2274,9 @@
   // ------------------------------------------------------------------- form
 
   const NEW_SUPPLIER = '__new__';
+  const NEW_SUPPLIER_LABEL = 'New supplier (details below)';
+  // Shown where a supplier is optional: the list stays short when one-time sellers are left out.
+  const ONE_TIME_SELLER = 'Only for a seller you will buy from again. One-time purchase? Leave the supplier empty.';
   const DRAFT_FIELDS = ['new_supplier_name', 'new_supplier_tax_id', 'new_supplier_bank_name', 'new_supplier_bank_account', 'request_type', 'amount_total', 'expense_category', 'send_to', 'description', 'no_doc_reason', 'no_doc_note', 'payee_type',
     'outlet_code', 'supplier_id', 'document_type', 'due_date', 'invoice_no', 'invoice_date', 'is_red_invoice',
     'amount_before_vat', 'vat_amount', 'payment_method', 'payee_name', 'payee_account', 'payee_bank'];
@@ -2684,7 +2747,6 @@
     // The supplier is picked from a list that can be searched by typing (with or without accents).
     // Categories named in config (supplier_filter_categories) list only their own suppliers.
     const ownListCategories = (state.limits && state.limits.supplierCategories) || [];
-    const NEW_SUPPLIER_LABEL = 'New supplier (details below)';
     // Adding a supplier is its own link under the box: always in sight, however long the list is.
     const addSupplierLink = h('button.link.picker-add', { type: 'button', text: '+ Add a new supplier', onclick: function () { addNewSupplier(''); } });
     const SUPPLIER_PLACEHOLDER = 'Search or choose a supplier';
@@ -2813,8 +2875,9 @@
     });
     // A tap in the list must not take the cursor out of the box first (that would close the list).
     supplierList.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
+    const newSupplierHint = h('p.hint');
     const newSupplierBox = h('div.payee-other', { hidden: true }, [
-      h('p.hint', { text: 'New suppliers need an owner\u2019s approval before the accountant can pay into their account.' }),
+      newSupplierHint,
       field('new_supplier_name', 'Supplier name', input('new_supplier_name', { autocomplete: 'off' })),
       field('new_supplier_tax_id', 'Tax ID (MST)', input('new_supplier_tax_id', { inputmode: 'numeric', autocomplete: 'off' })),
       field('new_supplier_bank_name', 'Bank', input('new_supplier_bank_name', { autocomplete: 'off' })),
@@ -2868,6 +2931,7 @@
     function paintPayee() {
       const t = values.payee_type;
       supplierField.querySelector('.label').textContent = t === 'SUPPLIER' ? 'Supplier' : 'Bought from (optional)';
+      newSupplierHint.textContent = t === 'SUPPLIER' ? 'New suppliers need an owner\u2019s approval before the accountant can pay into their account.' : ONE_TIME_SELLER;
       checkRequired();
       supplierField.hidden = !t;
       otherFields.hidden = t !== 'OTHER';
