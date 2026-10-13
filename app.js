@@ -565,6 +565,9 @@
       h('button.link', { type: 'button', text: 'Refresh', onclick: function () { refreshViews(true); } }),
     ]);
     mount(page([tabs, refreshed].concat(body)), keepScroll);
+    // More tabs than fit (the admin on a narrow phone): the chosen one is brought into the bar.
+    const on = tabs && tabs.querySelector('.on');
+    if (on) tabs.scrollLeft = Math.max(0, on.getBoundingClientRect().right - tabs.getBoundingClientRect().right);
   }
 
   /** Owner/admin timeline across every outlet (spec §8), loaded on first open. */
@@ -585,7 +588,7 @@
       [h('option', { value: '', text: 'All outlets' })].concat(outletCodes().map(function (c) { return h('option', { value: c, text: c }); })));
     outletSel.value = allFilter.outlet;
     const statusSel = h('select.input', { onchange: function () { allFilter.status = statusSel.value; shownMore = {}; renderHome(true); } },
-      [h('option', { value: 'OPEN', text: 'Open (not paid yet)' }), h('option', { value: '', text: 'Every status' })]
+      [h('option', { value: 'OPEN', text: 'Open' }), h('option', { value: '', text: 'Every status' })]
         .concat(state.ref.enums.filter(function (x) { return x.field === 'status'; }).map(function (x) { return h('option', { value: x.value, text: x.label }); })));
     statusSel.value = allFilter.status;
     const search = h('input.input', { type: 'search', placeholder: 'Search ID, supplier, person…', value: allFilter.q });
