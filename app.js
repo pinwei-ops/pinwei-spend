@@ -215,7 +215,7 @@
 
   function expenseCard(e, showSubmitter) {
     const overdue = isOverdue(e);
-    return h('a.item', { href: '#/expense/' + encodeURIComponent(e.expense_id), 'data-status': e.status }, [
+    return h('a.item' + (overdue ? '.overdue' : ''), { href: '#/expense/' + encodeURIComponent(e.expense_id), 'data-status': e.status }, [
       h('div.item-body', {}, [
         h('div.item-top', {}, [h('span.amount', { text: fmtMoney(e.status === 'PARTIAL' ? e.balance_due : e.amount_total) + (e.status === 'PARTIAL' ? ' left' : '') }), statusChip(e.status)]),
         h('div.item-mid', { text: categoryShort(e.expense_category) + (e.supplier_name ? ' · ' + e.supplier_name : e.description ? ' · ' + e.description : '') }),
@@ -252,13 +252,25 @@
     return n + ' ₫';
   }
 
+  // A long list opens with its first rows; "Show more" brings the next ones, so nobody has to scroll through everything.
+  const PAGE = 10;
+  let shownMore = {};         // list name → rows on screen; back to the first rows when the tab or a filter changes
+  function firstRows(key, rows) {
+    const n = Math.max(PAGE, shownMore[key] || 0);
+    if (rows.length <= n + 2) return { rows: rows, more: null };     // never a button for one or two rows
+    return { rows: rows.slice(0, n), more: h('button.btn.btn-rows', { type: 'button', text: 'Show more (' + (rows.length - n) + ' left)',
+      onclick: function () { shownMore[key] = n + PAGE * 2; renderHome(true); } }) };
+  }
+
+  /** opts: showSubmitter, showEmpty + empty, collapsed, alert (red title), all (never cut short). */
   function section(title, items, opts) {
     opts = opts || {};
     if (!items.length && !opts.showEmpty) return null;
-    const head = h('h2.section-title', {}, [title, items.length ? h('span.count', { text: String(items.length) }) : null]);
-    const list = items.length ? h('div.list', {}, sortItems(items).map(function (e) { return expenseCard(e, opts.showSubmitter); })) : h('p.empty', { text: opts.empty });
-    if (opts.collapsed) return h('details.section', { open: doneOpen, ontoggle: function (ev) { doneOpen = ev.currentTarget.open; } }, [h('summary', {}, [head]), list]);
-    return h('section.section', {}, [head, list]);
+    const head = h('h2.section-title' + (opts.alert ? '.alert' : ''), {}, [title, items.length ? h('span.count', { text: String(items.length) }) : null]);
+    const part = opts.all ? { rows: sortItems(items), more: null } : firstRows(title, sortItems(items));
+    const list = items.length ? h('div.list', {}, part.rows.map(function (e) { return expenseCard(e, opts.showSubmitter); })) : h('p.empty', { text: opts.empty });
+    if (opts.collapsed) return h('details.section', { open: doneOpen, ontoggle: function (ev) { doneOpen = ev.currentTarget.open; } }, [h('summary', {}, [head]), list, part.more]);
+    return h('section.section', {}, [head, list, part.more]);
   }
 
   // Order of every list. Newest first unless the viewer picks another order (remembered on this device).
@@ -282,7 +294,12 @@
       amount_asc: function (a, b) { return amount(a) - amount(b) || time(b) - time(a); },
       due: function (a, b) { return (due(a) - due(b)) || time(a) - time(b); },
     }[sortBy];
-    return list.slice().sort(by);
+    // Overdue is a warning: it always comes first, whatever order was chosen.
+    return list.slice().sort(function (a, b) {
+      const lateA = isOverdue(a), lateB = isOverdue(b);
+      if (lateA !== lateB) return lateA ? -1 : 1;
+      return by(a, b);
+    });
   }
 
   function sortControl() {
@@ -302,7 +319,7 @@
 
   /** A "Show: …" dropdown above a list. options: [[value, label], …] */
   function showFilter(value, options, onChange) {
-    const sel = h('select.input', { 'aria-label': 'Show', onchange: function () { onChange(sel.value); renderHome(true); } },
+    const sel = h('select.input', { 'aria-label': 'Show', onchange: function () { onChange(sel.value); shownMore = {}; renderHome(true); } },
       options.map(function (o) { return h('option', { value: o[0], text: o[1] }); }));
     sel.value = value;
     return h('label.show-filter', {}, [h('span.show-label', { text: 'Show' }), sel]);
@@ -421,7 +438,7 @@
       homeTab = (own || tabDefs.find(function (t) { return t.key !== 'mine' && t.count; }) || { key: 'mine' }).key;
     }
     const tabs = tabDefs.length > 1 ? h('div.tabs', { role: 'tablist', style: 'grid-template-columns: repeat(' + tabDefs.length + ', 1fr)' }, tabDefs.map(function (t) {
-      return h('button.tab' + (homeTab === t.key ? '.on' : ''), { type: 'button', role: 'tab', 'aria-selected': homeTab === t.key ? 'true' : 'false', onclick: function () { homeTab = t.key; renderHome(); } },
+      return h('button.tab' + (homeTab === t.key ? '.on' : ''), { type: 'button', role: 'tab', 'aria-selected': homeTab === t.key ? 'true' : 'false', onclick: function () { homeTab = t.key; shownMore = {}; renderHome(); } },
         [t.label, t.count ? h('span.count', { text: String(t.count) }) : null]);
     })) : null;
 
@@ -448,19 +465,24 @@
       const overdueN = q.filter(isOverdue).length;
       const partialN = q.filter(function (e) { return e.status === 'PARTIAL'; }).length;
       let listPart;
+      let lateList = null;      // everything to pay: what is overdue stands first, as its own list, never cut short
       if (payShow === 'PAID') {
         const all = allExpenses();
         const since = Date.now() - 30 * 86400000;
         const paid = (all || []).filter(function (e) { return (e.status === 'PAID' || e.status === 'CLOSED') && e.paid_at && new Date(e.paid_at).getTime() >= since; })
           .sort(function (a, b) { return new Date(b.paid_at) - new Date(a.paid_at); });
-        listPart = all ? section('Paid in the last 30 days', paid, { showEmpty: true, empty: 'Nothing paid in the last 30 days.', showSubmitter: true }) : loading('Loading paid expenses…');
+        listPart = [all ? section('Paid in the last 30 days', paid, { showEmpty: true, empty: 'Nothing paid in the last 30 days.', showSubmitter: true }) : loading('Loading paid expenses…')];
       } else {
         const shown = q.filter(function (e) {
           if (payShow === 'OVERDUE') return isOverdue(e);
           return !payShow || e.status === payShow;
         });
         const title = { '': 'Approved, waiting for payment', APPROVED: 'Approved, nothing paid yet', PARTIAL: 'Partially paid', OVERDUE: 'Overdue' }[payShow];
-        listPart = section(title, shown, { showEmpty: true, empty: payShow ? 'Nothing here.' : 'Nothing to pay.', showSubmitter: true });
+        const late = payShow ? [] : shown.filter(isOverdue);
+        const rest = shown.filter(function (e) { return late.indexOf(e) === -1; });
+        lateList = section('Overdue', late, { showSubmitter: true, alert: true, all: true });
+        listPart = [late.length && !rest.length ? null
+          : section(title, rest, { showEmpty: true, empty: payShow ? 'Nothing here.' : 'Nothing to pay.', showSubmitter: true, alert: payShow === 'OVERDUE' })];
       }
       body = [
         stats([
@@ -469,6 +491,7 @@
           { value: overdueN, label: 'Overdue', alert: overdueN > 0 },
           { value: partialN, label: 'Partially paid' },
         ]),
+        lateList,
         section('Payment problems to sort out', state.views.to_fix || [], { showSubmitter: true }),
         listControls(showFilter(payShow, [
           ['', 'Everything to pay (' + q.length + ')'],
@@ -477,10 +500,10 @@
           ['OVERDUE', 'Overdue (' + overdueN + ')'],
           ['PAID', 'Paid in the last 30 days'],
         ], function (v) { payShow = v; })),
-        listPart,
+      ].concat(listPart, [
         q.length && payShow !== 'PAID' ? h('button.btn', { type: 'button', text: 'Export list for bank transfers (CSV)', onclick: exportToPay }) : null,
         monthExportRow(),
-      ];
+      ]);
     } else if (homeTab === 'done') {
       const DONE_SHOW = { PAID: ['Paid', ['PAID', 'CLOSED']], REJECTED: ['Rejected', ['REJECTED']], CANCELLED: ['Cancelled', ['CANCELLED']] };
       const done = byStatus(['PAID', 'CLOSED', 'REJECTED', 'CANCELLED']);
@@ -558,23 +581,25 @@
     });
     const total = rows.reduce(function (sum, e) { return sum + (Number(e.amount_total) || 0); }, 0);
 
-    const outletSel = h('select.input', { onchange: function () { allFilter.outlet = outletSel.value; renderHome(true); } },
+    const outletSel = h('select.input', { onchange: function () { allFilter.outlet = outletSel.value; shownMore = {}; renderHome(true); } },
       [h('option', { value: '', text: 'All outlets' })].concat(outletCodes().map(function (c) { return h('option', { value: c, text: c }); })));
     outletSel.value = allFilter.outlet;
-    const statusSel = h('select.input', { onchange: function () { allFilter.status = statusSel.value; renderHome(true); } },
+    const statusSel = h('select.input', { onchange: function () { allFilter.status = statusSel.value; shownMore = {}; renderHome(true); } },
       [h('option', { value: 'OPEN', text: 'Open (not paid yet)' }), h('option', { value: '', text: 'Every status' })]
         .concat(state.ref.enums.filter(function (x) { return x.field === 'status'; }).map(function (x) { return h('option', { value: x.value, text: x.label }); })));
     statusSel.value = allFilter.status;
     const search = h('input.input', { type: 'search', placeholder: 'Search ID, supplier, person…', value: allFilter.q });
-    search.addEventListener('change', function () { allFilter.q = search.value; renderHome(true); });
+    search.addEventListener('change', function () { allFilter.q = search.value; shownMore = {}; renderHome(true); });
 
-    // Timeline: grouped by submission day when sorted by date; one list otherwise.
+    // Timeline: what is overdue first, then grouped by submission day when sorted by date; one list otherwise.
     const groups = [];
     const byDate = sortBy === 'new' || sortBy === 'old';
-    sortItems(rows).forEach(function (e) {
-      const day = byDate ? fmtDate(e.created_at) : (SORTS.find(function (s) { return s[0] === sortBy; }) || [])[1];
+    const part = firstRows('all', sortItems(rows));
+    part.rows.forEach(function (e) {
+      const late = isOverdue(e);
+      const day = late ? 'Overdue' : byDate ? fmtDate(e.created_at) : (SORTS.find(function (s) { return s[0] === sortBy; }) || [])[1];
       const last = groups[groups.length - 1];
-      if (last && last.day === day) last.items.push(e); else groups.push({ day: day, items: [e] });
+      if (last && last.day === day && last.late === late) last.items.push(e); else groups.push({ day: day, late: late, items: [e] });
     });
     return [
       h('div.filters', {}, [h('div.grid2', {}, [outletSel, statusSel]), search]),
@@ -587,8 +612,8 @@
       ]),
       rows.length ? null : h('p.empty', { text: 'Nothing matches.' }),
     ].concat(groups.map(function (g) {
-      return h('section.section', {}, [h('h2.section-title', { text: g.day }), h('div.list', {}, g.items.map(function (e) { return expenseCard(e, true); }))]);
-    }));
+      return h('section.section', {}, [h('h2.section-title' + (g.late ? '.alert' : ''), { text: g.day }), h('div.list', {}, g.items.map(function (e) { return expenseCard(e, true); }))]);
+    }), [part.more]);
   }
 
   function outletCodes() {
@@ -620,7 +645,7 @@
 
   function cashEntryLine(x) {
     const what = x.entry_type === 'SPEND'
-      ? [x.outlet_code, categoryShort(x.expense_category), x.description].filter(Boolean).join(' · ')
+      ? [x.outlet_code, categoryShort(x.expense_category), x.supplier_name, x.description].filter(Boolean).join(' · ')
       : x.entry_type === 'DEPOSIT'
         ? 'From ' + x.recorded_by_name + (x.status === 'PENDING' ? ' · waiting for the keeper to confirm' : x.status === 'CANCELLED' ? ' · cancelled' : ' · received by ' + x.confirmed_by_name + (x.received_amount !== '' && x.received_amount !== x.amount ? ' (' + fmtMoney(x.received_amount) + ' of ' + fmtMoney(x.amount) + ')' : ''))
         : x.description;
@@ -640,17 +665,76 @@
     ])]);
   }
 
+  // The entries are listed one month at a time (this month first), so the list stays short.
+  let cashMonth = '';           // month on screen; '' = this month
+  let cashOther = null;         // { month, entries, base }: another month, fetched when asked for
+  let cashOtherLoading = '';
+  function monthName(ym) {
+    return new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+  }
+  function monthBefore(ym) {
+    const d = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 2, 1);
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2);
+  }
+  /** One month's entries, latest day first. This month comes with the Cash tab; another month is fetched (null while it loads). */
+  function cashEntriesOf(month) {
+    const c = state.cash;
+    let list;
+    if (month === todayVN().slice(0, 7)) {
+      list = c.entries.filter(function (x) { return String(x.entry_date).slice(0, 7) === month; });
+    } else {
+      const have = cashOther && cashOther.month === month ? cashOther : null;
+      if ((!have || have.base !== c) && cashOtherLoading !== month) {      // not loaded yet, or the cash box changed since
+        cashOtherLoading = month;
+        Api.call('pettyCash', { month: month }).then(function (res) {
+          cashOther = { month: month, entries: res.entries || [], base: state.cash };
+          if (onHome() && homeTab === 'cash') renderHome(true);
+        }).catch(function (err) {
+          toast(err.message);
+          if (cashMonth === month) { cashMonth = ''; if (onHome() && homeTab === 'cash') renderHome(true); }
+        }).finally(function () { cashOtherLoading = ''; });
+      }
+      if (!have) return null;
+      list = have.entries;
+    }
+    return list.filter(function (x) { return !(x.entry_type === 'DEPOSIT' && x.status === 'PENDING'); })
+      .sort(function (a, b) { return a.entry_date < b.entry_date ? 1 : a.entry_date > b.entry_date ? -1 : 0; });
+  }
+
   function cashView() {
     const c = loadCash(false);
     if (!c) return [loading('Loading the cash box…')];
     const low = c.lowBalance > 0 && c.balance < c.lowBalance;
-    const groups = [];
-    c.entries.filter(function (x) { return !(x.entry_type === 'DEPOSIT' && x.status === 'PENDING'); }).forEach(function (x) {
-      const day = fmtDate(x.entry_date);
-      const last = groups[groups.length - 1];
-      if (last && last.day === day) last.items.push(x); else groups.push({ day: day, items: [x] });
-    });
-    const monthIn = h('input.input', { type: 'month', 'aria-label': 'Month to export', value: todayVN().slice(0, 7), max: todayVN().slice(0, 7) });
+    const thisMonth = todayVN().slice(0, 7);
+    const month = cashMonth || thisMonth;
+    const showMonth = function (m) { cashMonth = m === thisMonth ? '' : m; delete shownMore.cash; renderHome(true); };
+    const entries = cashEntriesOf(month);
+    let listed;
+    if (!entries) {
+      listed = [loading('Loading ' + monthName(month) + '…')];
+    } else if (!entries.length) {
+      listed = [
+        h('p.empty', { text: 'Nothing recorded in ' + monthName(month) + (month === thisMonth ? ' yet.' : '.') }),
+        month === thisMonth ? h('button.btn.btn-rows', { type: 'button', text: 'Show ' + monthName(monthBefore(month)), onclick: function () { showMonth(monthBefore(month)); } }) : null,
+      ];
+    } else {
+      const part = firstRows('cash', entries);
+      const groups = [];
+      part.rows.forEach(function (x) {
+        const day = fmtDate(x.entry_date);
+        const last = groups[groups.length - 1];
+        if (last && last.day === day) last.items.push(x); else groups.push({ day: day, items: [x] });
+      });
+      const spent = entries.reduce(function (t, x) { return t + (x.entry_type === 'SPEND' && !x.voided ? Number(x.amount) || 0 : 0); }, 0);
+      listed = [h('p.hint.cash-period', { text: entries.length + (entries.length === 1 ? ' entry' : ' entries') + ' · ' + fmtMoney(spent) + ' spent' })]
+        .concat(groups.map(function (g) {
+          return h('section.section', {}, [h('h2.section-title', { text: g.day }), h('div.list', {}, g.items.map(cashEntryLine))]);
+        }), [part.more]);
+    }
+    const monthIn = h('input.input', { type: 'month', 'aria-label': 'Month', value: month, max: thisMonth, onchange: function () {
+      if (!/^\d{4}-\d{2}$/.test(monthIn.value) || monthIn.value > thisMonth) { monthIn.value = month; return; }
+      if (monthIn.value !== month) showMonth(monthIn.value);
+    } });
     const exportBtn = h('button.btn', { type: 'button', text: 'Export month (CSV)', onclick: async function () {
       if (!/^\d{4}-\d{2}$/.test(monthIn.value)) { toast('Choose a month.'); return; }
       exportBtn.disabled = true;
@@ -680,10 +764,8 @@
         h('h2.section-title', {}, ['Deposits waiting to be confirmed', h('span.count', { text: String(c.pending.length) })]),
         h('div.list', {}, c.pending.map(function (x) { return depositCard(x); })),
       ]) : null,
-      groups.length ? null : h('p.empty', { text: 'Nothing recorded in the last 45 days.' }),
-    ].concat(groups.map(function (g) {
-      return h('section.section', {}, [h('h2.section-title', { text: g.day }), h('div.list', {}, g.items.map(cashEntryLine))]);
-    })).concat([h('div.month-export', {}, [monthIn, exportBtn])]);
+      h('section.section.cash-entries', {}, [h('h2.section-title', { text: 'Entries' }), h('div.month-export', {}, [monthIn, exportBtn])]),
+    ].concat(listed);
   }
 
   /** A deposit on its way: the keeper counts it and confirms what actually arrived. */
@@ -720,6 +802,112 @@
     card.appendChild(err);
     card.appendChild(btn);
     return card;
+  }
+
+  /** Text for searching: no accents, lower case ("Hiền Thảo" is found by typing "hien thao"). */
+  function plainText(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd').toLowerCase(); }
+
+  /**
+   * A supplier box that is searched by typing, as on the expense form but without "add a new supplier":
+   * a cash spend only points at a supplier already on the list.
+   * opts: { listId, category(): code, onPick(supplier or null) } → { el, value(), categoryChanged() }
+   */
+  function supplierPicker(opts) {
+    const ownList = (state.limits && state.limits.supplierCategories) || [];
+    const PLACEHOLDER = 'Search or choose a supplier';
+    let value = '';
+    const input = h('input.input.picker-input', { type: 'text', role: 'combobox', autocomplete: 'off', spellcheck: 'false',
+      'aria-expanded': 'false', 'aria-autocomplete': 'list', 'aria-controls': opts.listId, placeholder: PLACEHOLDER });
+    const list = h('div.picker-list', { id: opts.listId, role: 'listbox', 'aria-label': 'Suppliers', hidden: true });
+    const note = h('p.hint', { hidden: true });
+    const find = function (id) { return state.ref.suppliers.find(function (x) { return x.value === id; }); };
+    const name = function () { const s = find(value); return s ? s.label : ''; };
+    // Categories named in config (supplier_filter_categories) list only their own suppliers.
+    function choices() {
+      const cat = opts.category();
+      if (ownList.indexOf(cat) === -1) return state.ref.suppliers;
+      return state.ref.suppliers.filter(function (s) { return s.defaultCategory === cat || s.value === value; });
+    }
+    function paint() {
+      if (document.activeElement !== input) input.value = name();
+      const cat = opts.category();
+      const own = ownList.indexOf(cat) !== -1;
+      note.textContent = own ? 'Only the suppliers for "' + categoryShort(cat) + '" are listed.' : '';
+      note.hidden = !own;
+    }
+    function close() {
+      list.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+    }
+    function open(query) {
+      const words = plainText(query).split(/\s+/).filter(Boolean);
+      const rows = words.length ? [] : [{ value: '', label: 'Not listed / none', cls: '.quiet' }];
+      choices().forEach(function (s) {
+        const text = plainText(s.label);
+        if (words.every(function (w) { return text.indexOf(w) !== -1; })) rows.push({ value: s.value, label: s.label });
+      });
+      list.textContent = '';
+      if (!rows.length) list.appendChild(h('p.picker-empty', { text: 'No supplier matches "' + String(query).trim() + '". Leave this empty and name the seller under "What for?".' }));
+      rows.forEach(function (r, i) {
+        list.appendChild(h('div.picker-option' + (r.cls || ''), { role: 'option', id: opts.listId + '_' + i, 'data-value': r.value,
+          'aria-selected': String(r.value === value), text: r.label, onclick: function () { pick(r.value); } }));
+      });
+      list.hidden = false;
+      list.scrollTop = 0;
+      input.setAttribute('aria-expanded', 'true');
+      input.removeAttribute('aria-activedescendant');
+    }
+    function pick(id) {
+      value = id;
+      input.blur();   // closes the list and shows the name
+      paint();
+      opts.onPick(find(id) || null);
+    }
+    function move(step) {
+      const options = [].slice.call(list.querySelectorAll('.picker-option'));
+      if (!options.length) return;
+      const now = options.findIndex(function (o) { return o.classList.contains('active'); });
+      const next = Math.max(0, Math.min(options.length - 1, now === -1 ? (step > 0 ? 0 : options.length - 1) : now + step));
+      options.forEach(function (o, i) { o.classList.toggle('active', i === next); });
+      input.setAttribute('aria-activedescendant', options[next].id);
+      options[next].scrollIntoView({ block: 'nearest' });
+    }
+    // While the box is in use it is empty for typing; the supplier already chosen shows as its grey text.
+    input.addEventListener('focus', function () { input.placeholder = name() || PLACEHOLDER; input.value = ''; open(''); });
+    input.addEventListener('click', function () { if (list.hidden) open(input.value); });
+    input.addEventListener('input', function () { open(input.value); });
+    input.addEventListener('blur', function () { close(); input.placeholder = PLACEHOLDER; input.value = name(); });
+    input.addEventListener('keydown', function (ev) {
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        if (list.hidden) open(''); else move(ev.key === 'ArrowDown' ? 1 : -1);
+      } else if (ev.key === 'Enter') {
+        ev.preventDefault();
+        if (list.hidden) { open(''); return; }
+        const active = list.querySelector('.picker-option.active');
+        const found = list.querySelectorAll('.picker-option:not(.quiet)');
+        if (active) active.click();
+        else if (found.length === 1) found[0].click();
+      } else if (ev.key === 'Escape' && !list.hidden) {
+        ev.preventDefault();
+        input.blur();
+      }
+    });
+    // A tap in the list must not take the cursor out of the box first (that would close the list).
+    list.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
+    return {
+      el: h('div.picker', {}, [input, list, note]),
+      value: function () { return value; },
+      /** Another category was tapped: a supplier that is not on that category's own list is taken out. */
+      categoryChanged: function () {
+        const s = find(value);
+        const cat = opts.category();
+        if (s && ownList.indexOf(cat) !== -1 && s.defaultCategory !== cat) value = '';
+        close();
+        paint();
+      },
+    };
   }
 
   /** Money field with thousands separators and the amount in words. value() → number or 0. */
@@ -870,9 +1058,17 @@
         const r = function (x) { const i = CATEGORY_ORDER.indexOf(x.value); return i === -1 ? 99 : i; };
         return r(a) - r(b);
       }).forEach(function (c) {
-        catGrid.appendChild(h('button.chip-btn', { type: 'button', role: 'radio', 'data-value': c.value, text: categoryShort(c.value), title: c.label, onclick: function () { category = c.value; paintCats(); touch('expense_category'); } }));
+        catGrid.appendChild(h('button.chip-btn', { type: 'button', role: 'radio', 'data-value': c.value, text: categoryShort(c.value), title: c.label, onclick: function () { category = c.value; paintCats(); if (supplier) supplier.categoryChanged(); touch('expense_category'); } }));
       });
       paintCats();
+      // As on an expense: the supplier it was bought from, when it is one on the list (shown once the server keeps it).
+      const supplier = state.limits && state.limits.pettySupplier ? supplierPicker({
+        listId: 'cash_supplier_list',
+        category: function () { return category; },
+        onPick: function (s) {       // a regular supplier suggests its usual category
+          if (s && s.defaultCategory && !category && catGrid.querySelector('[data-value="' + s.defaultCategory + '"]')) { category = s.defaultCategory; paintCats(); touch('expense_category'); }
+        },
+      }) : null;
       const outlet = h('select.input', {}, [h('option', { value: '', text: 'Choose the outlet' })]
         .concat(state.ref.outlets.map(function (o) { return h('option', { value: o.value, text: o.label }); })));
       note.placeholder = 'What was bought, and why in cash?';
@@ -891,12 +1087,14 @@
         noDoc,
         fieldBox('outlet_code', 'For which outlet?', outlet),
         fieldBox('expense_category', 'Category', catGrid),
+        supplier ? fieldBox('supplier_id', 'Supplier (optional)', supplier.el) : null,
         fieldBox('description', 'What for?', note),
         fieldBox('entry_date', 'Date', date),
       ];
       action = 'pettySpend';
       payloadOf = function () {
         return { amount: amount.value(), entry_date: date.value, outlet_code: outlet.value, expense_category: category, description: note.value.trim(),
+          supplier_id: supplier ? supplier.value() : '',
           no_doc_reason: attachment || extras.length ? '' : reasonSel.value, no_doc_note: attachment || extras.length ? '' : reasonNote.value.trim() };
       };
     } else if (kind === 'deposit') {
@@ -1064,6 +1262,7 @@
             row('Date', fmtDate(x.entry_date)),
             row('Outlet', x.outlet_code),
             row('Category', x.expense_category ? categoryLabel(x.expense_category) : ''),
+            row('Supplier', x.supplier_name),
             row(x.entry_type === 'COUNT' ? 'Count' : 'What for', x.description),
             row('Recorded by', x.recorded_by_name + ' · ' + fmtDateTime(x.created_at)),
             x.entry_type === 'DEPOSIT' ? row('Status', x.status === 'PENDING' ? 'Waiting for the keeper to confirm' : x.status === 'CANCELLED' ? 'Cancelled' : 'Received') : null,
@@ -2485,7 +2684,6 @@
     // The supplier is picked from a list that can be searched by typing (with or without accents).
     // Categories named in config (supplier_filter_categories) list only their own suppliers.
     const ownListCategories = (state.limits && state.limits.supplierCategories) || [];
-    const plainText = function (s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd').toLowerCase(); };
     const NEW_SUPPLIER_LABEL = 'New supplier (details below)';
     // Adding a supplier is its own link under the box: always in sight, however long the list is.
     const addSupplierLink = h('button.link.picker-add', { type: 'button', text: '+ Add a new supplier', onclick: function () { addNewSupplier(''); } });
