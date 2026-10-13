@@ -413,7 +413,7 @@
     // Tabs by role; queues come first because they are someone's job.
     const tabDefs = [];
     if (PAYER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'pay', label: 'To pay', count: state.views.to_pay.length + (state.views.to_fix || []).length });
-    if (APPROVER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'approve', label: 'To approve', count: state.views.to_approve.length + (state.views.to_check || []).length });
+    if (APPROVER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'approve', label: 'To approve', count: state.views.to_approve.length + (state.views.to_check || []).length + (state.views.for_owners || []).length });
     tabDefs.push({ key: 'mine', label: tabDefs.length ? 'Mine' : 'My expenses', count: byStatus(['NEEDS_INFO']).length });
     if (ALL_VIEW_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'all', label: role === 'OUTLET_MANAGER' ? 'Outlet' : 'All', count: 0 });
     // Petty cash: first for the cash keeper and funder (it is their job), last for everyone else who follows it.
@@ -449,15 +449,22 @@
       body = allView();
     } else if (homeTab === 'approve') {
       const qa = state.views.to_approve;
+      // The admin also sees what is waiting for the owners, and can step in.
+      const theirs = state.views.for_owners || [];
+      const theirPending = theirs.filter(function (e) { return e.status === 'PENDING_APPROVAL'; });
+      const theirChecks = theirs.filter(function (e) { return e.status !== 'PENDING_APPROVAL'; });
+      const waiting = qa.concat(theirPending);
       body = [
         stats([
-          { value: qa.length, label: 'Waiting', brand: true },
-          { value: fmtShort(sum(qa, 'amount_total')), label: 'Total' },
-          { value: (state.views.to_check || []).length, label: 'Cash checks' },
+          { value: waiting.length, label: 'Waiting', brand: true },
+          { value: fmtShort(sum(waiting, 'amount_total')), label: 'Total' },
+          { value: (state.views.to_check || []).length + theirChecks.length, label: 'Cash checks' },
         ]),
-        qa.length > 1 ? listControls(null) : null,
-        section('Waiting for your decision', state.views.to_approve, { showEmpty: true, empty: 'Nothing waiting for you.', showSubmitter: true }),
+        waiting.length > 1 ? listControls(null) : null,
+        section('Waiting for your decision', qa, { showEmpty: !theirs.length, empty: 'Nothing waiting for you.', showSubmitter: true }),
         section('Cash payments to post-check', state.views.to_check || [], { showSubmitter: true }),
+        section('Waiting for the owners', theirPending, { showSubmitter: true }),
+        section('Cash checks waiting for the owners', theirChecks, { showSubmitter: true }),
       ];
     } else if (homeTab === 'pay') {
       const q = state.views.to_pay;
@@ -1623,8 +1630,9 @@
       setDisabled(true);
       // Back to the list at once; the decision is saved in the background (a few seconds).
       // If saving fails, the item comes back to the list and a message says why.
-      const item = (state.views.to_approve || []).find(function (x) { return x.expense_id === e.expense_id; });
-      removeFrom('to_approve', e.expense_id);
+      const from = (state.views.for_owners || []).some(function (x) { return x.expense_id === e.expense_id; }) ? 'for_owners' : 'to_approve';
+      const item = (state.views[from] || []).find(function (x) { return x.expense_id === e.expense_id; });
+      removeFrom(from, e.expense_id);
       savingIds[e.expense_id] = true;
       state.detail = null;
       toast({ APPROVE: 'Approving ', REJECT: 'Rejecting ', REQUEST_INFO: 'Sending back for info: ' }[decision] + e.expense_id + '…');
@@ -1635,7 +1643,7 @@
           toast({ APPROVE: 'Approved ', REJECT: 'Rejected ', REQUEST_INFO: 'Sent back for info: ' }[decision] + e.expense_id, 'ok');
         })
         .catch(function (ex) {
-          if (item) upsert('to_approve', item);
+          if (item) upsert(from, item);
           toast('Not saved — ' + e.expense_id + ': ' + ex.message);
         })
         .finally(function () {
@@ -1771,7 +1779,7 @@
   }
 
   function afterAction(res, message) {
-    ['to_approve', 'to_pay', 'to_check'].forEach(function (v) { removeFrom(v, res.expense.expense_id); });
+    ['to_approve', 'to_pay', 'to_check', 'for_owners'].forEach(function (v) { removeFrom(v, res.expense.expense_id); });
     if (res.expense.submitted_by === state.user.userId) upsert('mine', res.expense);
     state.detail = null;
     toast(message, 'ok');
@@ -3193,7 +3201,7 @@
       const hadAll = Boolean(state.views.all);
       state.views = data.views;
       if (data.sendTo) state.ref.sendTo = data.sendTo;
-      Object.keys(savingIds).forEach(function (id) { removeFrom('to_approve', id); });
+      Object.keys(savingIds).forEach(function (id) { removeFrom('to_approve', id); removeFrom('for_owners', id); });
       if (data.cash) state.cash = data.cash;
       if (hadAll) state.views.all = (await Api.call('listExpenses', { view: 'all' })).expenses;
       state.user.telegramLinked = data.telegramLinked;
