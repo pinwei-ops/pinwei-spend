@@ -47,7 +47,7 @@
 }
 
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; scroll-padding-top: 88px; scroll-padding-bottom: 96px; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 88px; scroll-padding-bottom: 160px; }
 body {
   margin: 0; color: var(--fg); font: 15px/1.5 var(--font);
   background: var(--bg);
@@ -159,6 +159,7 @@ a.item:hover { background: var(--hover); }
 .amount { font-weight: 700; font-size: 1.05rem; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
 .amount.big { font-size: 1.7rem; }
 .item-mid { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.item .item-mid { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .item-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 6px; color: var(--faint); font-size: .78rem; }
 .item-meta .due { color: var(--st-needs); font-weight: 600; }
 .item-meta .due.overdue { color: var(--bad); }
@@ -359,6 +360,7 @@ details.more-inline[open] > .input { margin-top: 6px; }
 }
 /* Three tiles on a 320 px phone: the longest label ("Cancelled") stays inside its tile. */
 @media (max-width: 359px) { .stat { padding: 10px 8px; } .stat-label { letter-spacing: .02em; } }
+@media (max-width: 359px) { .who-name { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; } }
 @media (max-width: 480px) {
   .brand span { display: none; }
   .topbar-inner { gap: 10px; }
@@ -449,7 +451,7 @@ details.more > summary::-webkit-details-marker, details.more-inline > summary::-
 details.more > summary::after, details.more-inline > summary::after { content: "▾"; margin-left: 8px; color: var(--muted); }
 details.more[open] > summary::after, details.more-inline[open] > summary::after { content: "▴"; }
 /* L7: short screens (keyboard open, landscape): the header and the submit bar stop following. */
-@media (max-height: 500px) { .topbar, .sticky-submit { position: static; } }
+@media (max-height: 500px) { .topbar, .sticky-submit { position: static; } html { scroll-padding-top: 0; scroll-padding-bottom: 0; } }
 /* L12: touch feedback that doesn't stick after a tap. */
 .btn:active, .choice:active, .chip-btn:active, a.item:active, .dropzone:active { filter: brightness(.96); }
 /* L17: iPhone date fields line up with the others. */

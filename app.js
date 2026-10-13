@@ -51,6 +51,24 @@
     setTimeout(function () { el.classList.remove('show'); setTimeout(function () { el.remove(); }, 300); }, 3500);
   }
 
+  /** Tiles that act as one radio group: a single Tab stop (the chosen tile, or the first one). */
+  function radioTabStop(group) {
+    const tiles = [].slice.call(group.querySelectorAll('[role=radio]'));
+    const stop = tiles.filter(function (b) { return b.getAttribute('aria-checked') === 'true'; })[0] || tiles[0];
+    tiles.forEach(function (b) { b.tabIndex = b === stop ? 0 : -1; });
+  }
+  /** Arrow keys move between the tiles of a group; Space or Enter chooses, as a tap does. */
+  function radioKeys(group) {
+    group.addEventListener('keydown', function (ev) {
+      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[ev.key];
+      const tiles = [].slice.call(group.querySelectorAll('[role=radio]'));
+      const at = tiles.indexOf(document.activeElement);
+      if (!step || at === -1) return;
+      ev.preventDefault();
+      tiles[(at + step + tiles.length) % tiles.length].focus();
+    });
+  }
+
   // --------------------------------------------------------------- formats
 
   const money = new Intl.NumberFormat('en-US');
@@ -665,6 +683,10 @@
     return state.cash || null;
   }
 
+  function cashChip(x) {
+    return h('span.chip' + (x.entry_type === 'DEPOSIT' ? '.ok' : x.entry_type === 'SPEND' ? '.info' : '.warn'), { text: CASH_TYPE[x.entry_type] || x.entry_type });
+  }
+
   function signedMoney(n) { return (n > 0 ? '+' : n < 0 ? '−' : '') + fmtMoney(Math.abs(n)); }
 
   function cashEntryLine(x) {
@@ -677,7 +699,7 @@
     return h('a.item.cash-item' + (x.voided || x.status === 'CANCELLED' ? '.voided' : ''), { href: '#/cash/' + encodeURIComponent(x.entry_id) }, [h('div.item-body', {}, [
       h('div.item-top', {}, [
         h('span.amount' + (x.effect > 0 ? '.cash-in' : ''), { text: shown }),
-        h('span.chip' + (x.entry_type === 'DEPOSIT' ? '.ok' : x.entry_type === 'SPEND' ? '.info' : '.warn'), { text: CASH_TYPE[x.entry_type] || x.entry_type }),
+        cashChip(x),
       ]),
       h('div.item-mid', { text: what }),
       h('div.item-meta', {}, [
@@ -803,16 +825,28 @@
     amount.input.setAttribute('aria-required', 'true');
     const err = h('p.error', { hidden: true });
     const btn = h('button.btn.btn-approve', { type: 'button', text: 'Received' });
-    btn.addEventListener('click', async function () {
-      const got = amount.value();
-      if (!got) { err.textContent = 'Enter the amount you received.'; err.hidden = false; return; }
-      if (got !== Number(x.amount) && !window.confirm('You received ' + fmtMoney(got) + ', not ' + fmtMoney(x.amount) + '. The owners will be told about the difference. Continue?')) return;
+    const sure = h('div.stack', { hidden: true });   // a different amount is confirmed here first
+    const askAgain = function () { sure.hidden = true; btn.hidden = false; };
+    async function save(got) {
       btn.disabled = true;
       try {
         const res = await Api.call('pettyConfirm', { id: x.entry_id, received_amount: got });
         toast('Received ' + fmtMoney(got), 'ok');
         if (res.cash) { state.cash = res.cash; if (onHome() && homeTab === 'cash') renderHome(true); } else loadCash(true);
-      } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
+      } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; askAgain(); }
+    }
+    btn.addEventListener('click', function () {
+      const got = amount.value();
+      if (!got) { err.textContent = 'Enter the amount you received.'; err.hidden = false; return; }
+      if (got === Number(x.amount)) { save(got); return; }
+      sure.textContent = '';
+      sure.appendChild(h('p.confirm-text', { text: 'You received ' + fmtMoney(got) + ', not ' + fmtMoney(x.amount) + '. The owners will be told about the difference.' }));
+      sure.appendChild(h('div.row', {}, [
+        h('button.btn', { type: 'button', text: 'Back', onclick: askAgain }),
+        h('button.btn.btn-approve', { type: 'button', text: 'Confirm ' + fmtMoney(got).replace(' ', ' '), onclick: function (ev) { ev.currentTarget.disabled = true; save(got); } }),
+      ]));
+      sure.hidden = false;
+      btn.hidden = true;
     });
     card.appendChild(starLabel(h('label.label', { for: 'got_' + x.entry_id, text: 'Amount you received' })));
     card.appendChild(amount.el);
@@ -822,10 +856,11 @@
       if (!(amount.value() > 0) && gotTouched) { err.textContent = 'Enter the amount you received. This field is required.'; err.hidden = false; err.dataset.req = '1'; }
       else if (err.dataset.req) { err.hidden = true; delete err.dataset.req; }
     };
-    amount.input.addEventListener('input', function () { gotTouched = true; checkGot(); });
+    amount.input.addEventListener('input', function () { gotTouched = true; askAgain(); checkGot(); });
     checkGot();
     card.appendChild(err);
     card.appendChild(btn);
+    card.appendChild(sure);
     return card;
   }
 
@@ -1120,7 +1155,7 @@
     if (kind === 'spend') {
       let category = '';
       const catGrid = h('div.cat-grid', { role: 'radiogroup', 'aria-label': 'Category' });
-      const paintCats = function () { catGrid.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.value === category); b.setAttribute('aria-checked', b.dataset.value === category); }); };
+      const paintCats = function () { catGrid.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.value === category); b.setAttribute('aria-checked', b.dataset.value === category); }); radioTabStop(catGrid); };
       state.ref.categories.filter(function (c) { return !offTheForm(c.value); }).sort(function (a, b) {
         const r = function (x) { const i = CATEGORY_ORDER.indexOf(x.value); return i === -1 ? 99 : i; };
         return r(a) - r(b);
@@ -1128,6 +1163,7 @@
         catGrid.appendChild(h('button.chip-btn', { type: 'button', role: 'radio', 'data-value': c.value, text: categoryShort(c.value), title: c.label, onclick: function () { category = c.value; paintCats(); if (supplier) supplier.categoryChanged(); touch('expense_category'); } }));
       });
       paintCats();
+      radioKeys(catGrid);
       // As on an expense: the supplier it was bought from, when it is one on the list (shown once the server keeps it).
       const newName = h('input.input', { autocomplete: 'off', maxlength: 200, oninput: function () { touch('new_supplier_name'); } });
       const newTax = h('input.input', { inputmode: 'numeric', autocomplete: 'off' });
@@ -1229,6 +1265,7 @@
         if (expected === null) return;
         const d = amount.value() - expected;
         diff.textContent = !amount.input.value ? '' : d === 0 ? 'Matches the records.' : (d < 0 ? 'Short by ' : 'Over by ') + fmtMoney(Math.abs(d)) + ' — the owners will be told.';
+        diff.classList.toggle('warn-text', Boolean(amount.input.value) && d !== 0);
       };
       note.placeholder = 'Optional note';
       rules = [
@@ -1371,7 +1408,7 @@
           x.voided ? h('div.flag', { text: 'This entry was cancelled. See the cancelling entry in the list.' }) : null,
           h('div.card', {}, [
             h('div.item-top', {}, [h('span.amount.big', { text: x.entry_type === 'DEPOSIT' && x.status !== 'RECEIVED' ? fmtMoney(x.amount) : signedMoney(x.effect) }),
-              h('span.chip', { text: CASH_TYPE[x.entry_type] || x.entry_type })]),
+              cashChip(x)]),
             row('Entry', x.entry_id),
             row('Date', fmtDate(x.entry_date)),
             row('Outlet', x.outlet_code),
@@ -2175,8 +2212,9 @@
       if (bank && !star) proofLabel.appendChild(h('span.req-star', { text: ' *', 'aria-hidden': 'true' }));
       if (!bank && star) star.remove();
       if (!busy) lock(btn, missing.length > 0 || amount > balance);
-      payMissing.textContent = missing.length ? 'Still needed: ' + missing.join(', ') : '';
-      payMissing.hidden = !missing.length;
+      const over = !missing.length && amount > balance;   // the reason is said at the button too
+      payMissing.textContent = missing.length ? 'Still needed: ' + missing.join(', ') : over ? 'More than the balance due (' + fmtMoney(balance) + ').' : '';
+      payMissing.hidden = !missing.length && !over;
       return missing;
     }
     dateInput.addEventListener('change', function () { payTouched.date = true; checkPay(); });
@@ -2584,6 +2622,7 @@
           b.classList.toggle('on', on);
           b.setAttribute('aria-checked', on);
         });
+        radioTabStop(wrap);
       }
       options.forEach(function (o) {
         wrap.appendChild(h('button.choice', { type: 'button', role: 'radio', 'data-value': o.value, onclick: function () { set(name, o.value); paint(); if (o.onpick) o.onpick(); } }, [
@@ -2592,6 +2631,7 @@
         ]));
       });
       paint();
+      radioKeys(wrap);
       return wrap;
     }
 
@@ -2762,6 +2802,7 @@
         b.classList.toggle('on', on);
         b.setAttribute('aria-checked', on);
       });
+      radioTabStop(catGrid);
       const full = values.expense_category ? categoryLabel(values.expense_category) : '';
       catHint.textContent = full && full !== categoryShort(values.expense_category) ? 'Covers: ' + full : '';
     }
@@ -2770,6 +2811,7 @@
         onclick: function () { set('expense_category', c.value); paintCats(); supplierCategoryChanged(); } }));
     });
     paintCats();
+    radioKeys(catGrid);
     const catField = field('expense_category', 'Category', h('div', {}, [catGrid, catHint]));
 
     // --- send to
