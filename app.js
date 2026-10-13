@@ -925,9 +925,22 @@
     };
   }
 
+  /** A pasted amount may end in decimals ("1,250,000.00"): dong has none, so they are dropped, never read as two more digits. */
+  function wholeDongOnPaste(input) {
+    input.addEventListener('paste', function (ev) {
+      const text = ev.clipboardData ? ev.clipboardData.getData('text') : '';
+      const m = text.trim().replace(/\s*(₫|đ|vnd)$/i, '').match(/^(.*\d)[.,]\d{1,2}$/);
+      if (!m) return;
+      ev.preventDefault();
+      input.setRangeText(m[1], input.selectionStart, input.selectionEnd, 'end');
+      input.dispatchEvent(new Event('input'));
+    });
+  }
+
   /** Money field with thousands separators and the amount in words. value() → number or 0. */
   function moneyBox(initial, id) {
     const input = h('input.input.money', { inputmode: 'numeric', autocomplete: 'off', placeholder: 'Enter amount', id: id || null });
+    wholeDongOnPaste(input);
     const words = h('p.hint.words');
     let digits = String(initial || '').replace(/\D/g, '');
     function paint() {
@@ -2042,6 +2055,7 @@
     let busy = false;
 
     const amountInput = h('input.input.money', { inputmode: 'numeric', autocomplete: 'off' });
+    wholeDongOnPaste(amountInput);
     amountInput.value = money.format(balance);
     const dateInput = h('input.input', { type: 'date', max: todayVN() });
     dateInput.value = todayVN();
@@ -2546,6 +2560,7 @@
         paintWords();
       } });
       el.value = values[name] ? money.format(Number(values[name])) : '';
+      wholeDongOnPaste(el);
       paintWords();
       const wrap = h('div.money-wrap', {}, [el, h('span.suffix', { text: '₫' })]);
       return words ? h('div', {}, [wrap, words]) : wrap;

@@ -187,6 +187,8 @@ a.item:hover { background: var(--hover); }
 }
 .detail-side { display: flex; flex-direction: column; gap: 12px; }
 .detail-side > .section-title { margin: 8px 0 0; }
+/* On the expense's own page the line is never cut ("… · Not bought yet" is shown nowhere else). */
+.card[data-status] > .item-mid { white-space: normal; }
 .kv { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; border-top: 1px solid var(--line); font-size: .92rem; }
 .kv:first-of-type { margin-top: 10px; }
 .kv .k { color: var(--muted); flex: 0 0 auto; }
