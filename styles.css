@@ -137,7 +137,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .stat.stat-hero { border-top: 3px solid var(--accent); }
 .refresh-line { margin: -6px 0 10px; color: var(--faint); font-size: .8rem; text-align: right; }
 .refresh-line .link { padding: 2px 4px; font-size: .8rem; }
-.queue-total { margin: 0 0 6px; color: var(--muted); font-weight: 600; }
+.queue-total { margin: -8px 0 16px; color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* ---------------------------------------------------------- sections */
 .section { margin-top: 22px; }
@@ -491,3 +491,9 @@ details.more[open] > summary::after, details.more-inline[open] > summary::after 
 .topbar :focus-visible { outline-color: #fff; }
 :root[data-theme="dark"] .choice.on, :root[data-theme="dark"] .radio:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 :root[data-theme="dark"] .chip-btn.on { border-color: var(--accent); }
+
+/* Amounts line up digit under digit. Be Vietnam Pro has no figures of one width, so the ten digits alone (nothing
+   else: not the commas, not the dong sign, no letter) come from a font already on the phone whose figures all have one width. */
+@font-face { font-family: "Pin Wei digits"; src: local("Roboto"), local("Helvetica Neue"), local("Segoe UI"), local("Arial"); unicode-range: U+30-39; }
+@font-face { font-family: "Pin Wei digits"; font-weight: 600 700; src: local("Roboto Bold"), local("Helvetica Neue Bold"), local("HelveticaNeue-Bold"), local("Segoe UI Bold"), local("Arial Bold"); unicode-range: U+30-39; }
+.amount, .stat-value, .money, .payto-acc, .cash-balance-value, .submit-summary, .queue-total { font-family: "Pin Wei digits", var(--font); }

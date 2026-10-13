@@ -521,6 +521,7 @@
           { value: overdueN, label: 'Overdue', alert: overdueN > 0 },
           { value: partialN, label: 'Partially paid' },
         ]),
+        q.length ? h('p.queue-total', { text: 'Outstanding: ' + fmtMoney(total) }) : null,
         lateList,
         section('Payment problems to sort out', state.views.to_fix || [], { showSubmitter: true }),
         listControls(showFilter(payShow, [
@@ -864,6 +865,13 @@
     return card;
   }
 
+  /** A supplier's name that is too long for its box (the box cuts it) is shown in full in the line under it. */
+  function showIfCut(line, input, text) {
+    line.textContent = text;
+    line.hidden = true;
+    requestAnimationFrame(function () { line.hidden = document.activeElement === input || input.scrollWidth <= input.clientWidth + 1; });
+  }
+
   /** Text for searching: no accents, lower case ("Hiền Thảo" is found by typing "hien thao"). */
   function plainText(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd').toLowerCase(); }
 
@@ -880,6 +888,7 @@
       'aria-expanded': 'false', 'aria-autocomplete': 'list', 'aria-controls': opts.listId, placeholder: PLACEHOLDER });
     const list = h('div.picker-list', { id: opts.listId, role: 'listbox', 'aria-label': 'Suppliers', hidden: true });
     const note = h('p.hint', { hidden: true });
+    const full = h('p.hint', { hidden: true });
     const addLink = h('button.link.picker-add', { type: 'button', text: '+ Add a new supplier', onclick: function () { addNew(''); } });
     const find = function (id) { return state.ref.suppliers.find(function (x) { return x.value === id; }); };
     const name = function () { const s = find(value); return value === NEW_SUPPLIER ? NEW_SUPPLIER_LABEL : s ? s.label : ''; };
@@ -891,6 +900,7 @@
     }
     function paint() {
       if (document.activeElement !== input) input.value = name();
+      showIfCut(full, input, name());
       addLink.hidden = value === NEW_SUPPLIER;
       const cat = opts.category();
       const own = ownList.indexOf(cat) !== -1;
@@ -948,10 +958,10 @@
       options[next].scrollIntoView({ block: 'nearest' });
     }
     // While the box is in use it is empty for typing; the supplier already chosen shows as its grey text.
-    input.addEventListener('focus', function () { input.placeholder = name() || PLACEHOLDER; input.value = ''; open(''); });
+    input.addEventListener('focus', function () { input.placeholder = name() || PLACEHOLDER; input.value = ''; full.hidden = true; open(''); });
     input.addEventListener('click', function () { if (list.hidden) open(input.value); });
     input.addEventListener('input', function () { open(input.value); });
-    input.addEventListener('blur', function () { close(); input.placeholder = PLACEHOLDER; input.value = name(); });
+    input.addEventListener('blur', function () { close(); input.placeholder = PLACEHOLDER; input.value = name(); showIfCut(full, input, name()); });
     input.addEventListener('keydown', function (ev) {
       if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
         ev.preventDefault();
@@ -971,7 +981,7 @@
     // A tap in the list must not take the cursor out of the box first (that would close the list).
     list.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
     return {
-      el: h('div.picker', {}, [input, addLink, list, note, opts.below]),
+      el: h('div.picker', {}, [input, full, addLink, list, note, opts.below]),
       value: function () { return value; },
       set: function (id) { value = id; paint(); },
       /** Another category was tapped: a supplier that is not on that category's own list is taken out. */
@@ -2879,6 +2889,7 @@
       'aria-expanded': 'false', 'aria-autocomplete': 'list', 'aria-controls': 'supplier_list', placeholder: SUPPLIER_PLACEHOLDER });
     const supplierList = h('div.picker-list', { id: 'supplier_list', role: 'listbox', 'aria-label': 'Suppliers', hidden: true });
     const supplierNote = h('p.hint', { hidden: true });
+    const supplierFull = h('p.hint', { hidden: true });
     function supplierChoices() {
       const cat = values.expense_category;
       if (ownListCategories.indexOf(cat) === -1) return state.ref.suppliers;
@@ -2891,6 +2902,7 @@
     }
     function paintSupplier() {
       if (document.activeElement !== supplierInput) supplierInput.value = supplierLabel();
+      showIfCut(supplierFull, supplierInput, supplierLabel());
       newSupplierBox.hidden = values.supplier_id !== NEW_SUPPLIER;
       addSupplierLink.hidden = values.supplier_id === NEW_SUPPLIER;
       const own = ownListCategories.indexOf(values.expense_category) !== -1;
@@ -2973,6 +2985,7 @@
     supplierInput.addEventListener('focus', function () {
       supplierInput.placeholder = supplierLabel() || SUPPLIER_PLACEHOLDER;
       supplierInput.value = '';
+      supplierFull.hidden = true;
       openSuppliers('');
     });
     supplierInput.addEventListener('click', function () { if (supplierList.hidden) openSuppliers(supplierInput.value); });
@@ -2981,6 +2994,7 @@
       closeSuppliers();
       supplierInput.placeholder = SUPPLIER_PLACEHOLDER;
       supplierInput.value = supplierLabel();
+      showIfCut(supplierFull, supplierInput, supplierLabel());
     });
     supplierInput.addEventListener('keydown', function (ev) {
       if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
@@ -3009,7 +3023,7 @@
       field('new_supplier_bank_account', 'Account number', input('new_supplier_bank_account', { inputmode: 'numeric', autocomplete: 'off' })),
     ]);
     paintSupplier();
-    const supplierField = field('supplier_id', 'Supplier', h('div.picker', {}, [supplierInput, addSupplierLink, supplierList, supplierNote, newSupplierBox]));
+    const supplierField = field('supplier_id', 'Supplier', h('div.picker', {}, [supplierInput, supplierFull, addSupplierLink, supplierList, supplierNote, newSupplierBox]));
 
     /** Creates the typed-in supplier first, then the expense can point at it. */
     async function createSupplierFromForm() {
