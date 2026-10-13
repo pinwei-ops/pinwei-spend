@@ -202,6 +202,7 @@
   let mineShow = '';          // "Show" dropdown on the Mine tab
   let doneShow = '';          // "Show" dropdown on a requester's Done tab
   let homeTab = null;
+  let notSaved = [];          // decisions that could not be saved: they stay above the lists until dismissed
 
   /** Replaces or inserts an expense in a view list (keeps local state fresh without a reload). */
   function upsert(view, item) {
@@ -327,17 +328,21 @@
 
   /** Every expense the user may see across outlets; loaded once, then kept fresh by Refresh. null while loading. */
   let allLoading = false;
+  let allError = '';          // why the list could not be loaded; shown in its place until asked again
   function allExpenses() {
     if (state.views.all) return state.views.all;
-    if (!allLoading) {
+    if (!allLoading && !allError) {
       allLoading = true;
       Api.call('listExpenses', { view: 'all' }).then(function (res) {
         state.views.all = res.expenses;
+      }).catch(function (err) { allError = err.message; }).finally(function () {
+        allLoading = false;
         if (onHome()) renderHome(true);
-      }).catch(function (err) { toast(err.message); }).finally(function () { allLoading = false; });
+      });
     }
     return null;
   }
+  function allFailed() { return loadFailed(allError, function () { allError = ''; renderHome(true); }); }
 
   /** Card that walks the user through linking Telegram (no webhook: they tap Start, then "Done"). */
   function telegramCard() {
@@ -478,7 +483,7 @@
         const since = Date.now() - 30 * 86400000;
         const paid = (all || []).filter(function (e) { return (e.status === 'PAID' || e.status === 'CLOSED') && e.paid_at && new Date(e.paid_at).getTime() >= since; })
           .sort(function (a, b) { return new Date(b.paid_at) - new Date(a.paid_at); });
-        listPart = [all ? section('Paid in the last 30 days', paid, { showEmpty: true, empty: 'Nothing paid in the last 30 days.', showSubmitter: true }) : loading('Loading paid expenses…')];
+        listPart = [all ? section('Paid in the last 30 days', paid, { showEmpty: true, empty: 'Nothing paid in the last 30 days.', showSubmitter: true }) : allError ? allFailed() : loading('Loading paid expenses…')];
       } else {
         const shown = q.filter(function (e) {
           if (payShow === 'OVERDUE') return isOverdue(e);
@@ -567,11 +572,14 @@
       }
     }
     body.push(state.user.telegramLinked ? telegramFooter() : telegramCard());
-    const refreshed = h('p.refresh-line', {}, [
-      'Updated ' + (state.refreshedAt ? state.refreshedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—') + ' · ',
+    const refreshed = h('p.refresh-line' + (refreshFailed ? '.warn-text' : ''), {}, [
+      (refreshFailed ? 'Not updated since ' : 'Updated ') + (state.refreshedAt ? state.refreshedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—') + ' · ',
       h('button.link', { type: 'button', text: 'Refresh', onclick: function () { refreshViews(true); } }),
     ]);
-    mount(page([tabs, refreshed].concat(body)), keepScroll);
+    const failed = notSaved.length ? h('div.flags', { role: 'alert' }, notSaved.map(function (m) {
+      return h('div.flag', {}, [m + ' ', h('button.link', { type: 'button', text: 'OK', onclick: function () { notSaved.splice(notSaved.indexOf(m), 1); renderHome(true); } })]);
+    })) : null;
+    mount(page([failed, tabs, refreshed].concat(body)), keepScroll);
     // More tabs than fit (the admin on a narrow phone): the chosen one is brought into the bar.
     const on = tabs && tabs.querySelector('.on');
     if (on) tabs.scrollLeft = Math.max(0, on.getBoundingClientRect().right - tabs.getBoundingClientRect().right);
@@ -579,7 +587,7 @@
 
   /** Owner/admin timeline across every outlet (spec §8), loaded on first open. */
   function allView() {
-    if (!allExpenses()) return [loading('Loading all expenses…')];
+    if (!allExpenses()) return [allError ? allFailed() : loading('Loading all expenses…')];
     const OPEN = ['PENDING_APPROVAL', 'NEEDS_INFO', 'APPROVED', 'PARTIAL'];
     const q = allFilter.q.trim().toLowerCase();
     const rows = state.views.all.filter(function (e) {
@@ -638,15 +646,21 @@
 
   const CASH_TYPE = { DEPOSIT: 'Deposit', SPEND: 'Spend', COUNT: 'Cash count', VOID: 'Cancelled entry' };
   let cashLoading = false;
+  let cashError = '';         // as allError, for the cash box
 
   function loadCash(force) {
     if (state.cash && !force) return state.cash;
-    if (!cashLoading) {
+    if (!cashLoading && (force || !cashError)) {
       cashLoading = true;
+      cashError = '';
       Api.call('pettyCash').then(function (res) {
         state.cash = res;
+      }).catch(function (err) {
+        if (state.cash) toast(err.message); else cashError = err.message;
+      }).finally(function () {
+        cashLoading = false;
         if (onHome() && homeTab === 'cash') renderHome(true);
-      }).catch(function (err) { toast(err.message); }).finally(function () { cashLoading = false; });
+      });
     }
     return state.cash || null;
   }
@@ -713,7 +727,7 @@
 
   function cashView() {
     const c = loadCash(false);
-    if (!c) return [loading('Loading the cash box…')];
+    if (!c) return [cashError ? loadFailed(cashError, function () { cashError = ''; renderHome(true); }) : loading('Loading the cash box…')];
     const low = c.lowBalance > 0 && c.balance < c.lowBalance;
     const thisMonth = todayVN().slice(0, 7);
     const month = cashMonth || thisMonth;
@@ -993,11 +1007,11 @@
       return f ? f.querySelector('input:not([type=file]),select,textarea') || f.querySelector('[role=radiogroup]') : null;
     };
     const summary = h('div.error-summary', { role: 'alert', hidden: true });
-    function showProblems(details) {
+    function showProblems(details, title) {
       Object.keys(errs).forEach(function (k) { errs[k].hidden = true; });
       details.forEach(function (d) { const p = errs[d.field] || errs._form; p.textContent = d.message; p.hidden = false; });
       summary.textContent = '';
-      summary.appendChild(h('p.error-summary-title', { text: details.length === 1 ? 'Please fix 1 problem' : 'Please fix ' + details.length + ' problems' }));
+      summary.appendChild(h('p.error-summary-title', { text: title || (details.length === 1 ? 'Please fix 1 problem' : 'Please fix ' + details.length + ' problems') }));
       summary.appendChild(h('ul', {}, details.map(function (d) { return h('li', { text: d.message }); })));
       summary.hidden = false;
       summary.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1298,7 +1312,7 @@
         go('/');
       } catch (err) {
         if (err.code === 'VALIDATION' && err.details && err.details.length) showProblems(err.details);
-        else toast(err.message);
+        else showProblems([{ field: '_form', message: err.message + (err.code === 'NETWORK' ? ' Your form is kept.' : '') }], 'Not saved');
       } finally {
         saving = false;
         submit.textContent = kind === 'count' ? 'Save the count' : 'Save';
@@ -1391,6 +1405,11 @@
 
   function loading(text) {
     return h('div.center-block', { role: 'status', 'aria-live': 'polite' }, [h('div.spinner', { 'aria-hidden': 'true' }), h('p.sub', { text: text || 'Loading…' })]);
+  }
+
+  /** A list that could not be loaded: the reason and a way to ask again, not a spinner that never ends. */
+  function loadFailed(message, retry) {
+    return h('p.empty', { role: 'alert' }, [message, h('button.btn.btn-rows', { type: 'button', text: 'Try again', onclick: retry })]);
   }
 
   function base64ToBlob(b64, mime) {
@@ -1644,6 +1663,7 @@
         })
         .catch(function (ex) {
           if (item) upsert(from, item);
+          notSaved.push('Not saved — ' + e.expense_id + ': ' + ex.message);
           toast('Not saved — ' + e.expense_id + ': ' + ex.message);
         })
         .finally(function () {
@@ -3106,8 +3126,9 @@
           if (err.details.some(function (d) { return more.contains(fieldEls[d.field] || null); })) more.open = true;
           showErrorSummary(err.details);
         } else {
-          showError('_form', err.message || 'Something went wrong. Please try again.');
-          showErrorSummary([{ field: '_form', message: err.message || 'Something went wrong. Please try again.' }], err.code === 'NETWORK' ? 'Not sent' : null);
+          const message = (err.message || 'Something went wrong. Please try again.') + (err.code === 'NETWORK' ? ' Your form is kept.' : '');
+          showError('_form', message);
+          showErrorSummary([{ field: '_form', message: message }], err.code === 'NETWORK' ? 'Not sent' : null);
         }
       } finally {
         submitting = false;
@@ -3172,6 +3193,7 @@
   const POLL_MS = 60000;
   const MIN_GAP_MS = 15000;
   let refreshing = false;
+  let refreshFailed = false;  // the lists on screen are from last time: the "Updated" line says so
 
   function onHome() { return !location.hash || location.hash === '#/' || location.hash === '#'; }
   function userIsTyping() {
@@ -3206,10 +3228,17 @@
       if (hadAll) state.views.all = (await Api.call('listExpenses', { view: 'all' })).expenses;
       state.user.telegramLinked = data.telegramLinked;
       state.refreshedAt = new Date();
+      refreshFailed = false;
+      allError = '';
+      cashError = '';
       saveStartData();
       if (onHome() && !userIsTyping() && !document.querySelector('.overlay, .viewer')) renderHome(true);
     } catch (err) {
       if (manual) toast(err.message);
+      if (!refreshFailed) {
+        refreshFailed = true;
+        if (onHome() && !userIsTyping() && !document.querySelector('.overlay, .viewer')) renderHome(true);
+      }
     } finally {
       refreshing = false;
     }
@@ -3341,6 +3370,8 @@
     } catch (err) {
       if (!started || /^AUTH_/.test(err.code || '')) { forgetStartData(); renderFatal(err); return; }
       toast(err.code === 'NETWORK' ? 'No connection — showing what was saved at ' + state.refreshedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : err.message);
+      refreshFailed = true;
+      if (onHome() && !userIsTyping()) renderHome(true);
     }
   }
 

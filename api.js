@@ -125,7 +125,7 @@ window.Api = (function () {
     google.accounts.id.disableAutoSelect();
   }
 
-  /** One request, given up after 90 s; a dropped connection is reported plainly (the form is kept). */
+  /** One request, given up after 90 s; a dropped connection is reported plainly (a form adds that it is kept). */
   async function post(action, idToken, payload) {
     const ctrl = window.AbortController ? new AbortController() : null;
     const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 90000) : null;
@@ -142,7 +142,7 @@ window.Api = (function () {
         signal: ctrl ? ctrl.signal : undefined,
       });
     } catch (err) {
-      const e = new Error('No connection. Your form is kept: try again when you have signal.');
+      const e = new Error('No connection. Try again when you have signal.');
       e.code = 'NETWORK';
       throw e;
     } finally {

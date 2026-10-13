@@ -204,6 +204,7 @@ a.item:hover { background: var(--hover); }
 .doc .hint { margin-top: 6px; }
 .doc-missing { display: grid; place-items: center; min-height: 140px; border: 2px dashed var(--bad); border-color: color-mix(in srgb, var(--bad) 50%, transparent); border-radius: var(--radius); color: var(--bad); font-weight: 600; background: var(--bad-bg); }
 .flags { display: flex; flex-direction: column; gap: 8px; }
+.content > .flags { margin-bottom: 14px; }
 .flag { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bad-bg); color: var(--bad); font-weight: 600; font-size: .88rem; border-left: 3px solid var(--bad); }
 .flag.info { background: var(--info-bg); color: var(--info); border-left-color: var(--info); }
 
@@ -438,7 +439,7 @@ details.more-inline[open] > .input { margin-top: 6px; }
 /* M7: comfortable tap targets. */
 .topbar .link, .brand { min-height: 44px; }
 .back { display: inline-flex; align-items: center; min-height: 44px; padding-right: 12px; }
-.refresh-line .link, .tg-footer .link, .nodoc-toggle, .picker-add, .deposit-card .link, .tg-code .link, .signin-privacy { min-height: 44px; }
+.refresh-line .link, .tg-footer .link, .nodoc-toggle, .picker-add, .deposit-card .link, .tg-code .link, .signin-privacy, .flag .link { min-height: 44px; }
 details.section > summary { display: flex; align-items: center; min-height: 44px; }
 details.section > summary .section-title { margin: 0; }
 details.more-inline > summary, .pay-card > .decide > .btn { min-height: 44px; }
