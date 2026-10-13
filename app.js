@@ -796,7 +796,7 @@
     card.appendChild(amount.el);
     let gotTouched = false;
     const checkGot = function () {
-      btn.disabled = !(amount.value() > 0);
+      lock(btn, !(amount.value() > 0));
       if (!(amount.value() > 0) && gotTouched) { err.textContent = 'Enter the amount you received. This field is required.'; err.hidden = false; err.dataset.req = '1'; }
       else if (err.dataset.req) { err.hidden = true; delete err.dataset.req; }
     };
@@ -1235,7 +1235,7 @@
         errs.amount.hidden = false;
         errs.amount.dataset.required = '1';
       }
-      if (!saving) submit.disabled = missing.length > 0 || over;
+      if (!saving) lock(submit, missing.length > 0 || over);
       missingLine.textContent = missing.length ? 'Still needed: ' + missing.join(', ') : '';
       missingLine.hidden = !missing.length;
       return missing;
@@ -1674,6 +1674,12 @@
     return labelEl;
   }
 
+  /** A button that waits for something to be filled in: grey, unlike one that is busy saving. */
+  function lock(button, on) {
+    button.disabled = on;
+    button.classList.toggle('not-ready', on);
+  }
+
   /**
    * A required text box in a panel: its button waits until something is typed, and
    * "required" shows once the box was typed in and emptied again.
@@ -1683,7 +1689,7 @@
     let touched = false;
     function check() {
       const ok = box.value.trim() !== '';
-      button.disabled = !ok;
+      lock(button, !ok);
       if (!ok && touched) { errEl.textContent = message; errEl.hidden = false; errEl.dataset.req = '1'; }
       else if (errEl.dataset.req) { errEl.hidden = true; delete errEl.dataset.req; }
     }
@@ -2122,7 +2128,7 @@
       const star = proofLabel.querySelector('.req-star');
       if (bank && !star) proofLabel.appendChild(h('span.req-star', { text: ' *', 'aria-hidden': 'true' }));
       if (!bank && star) star.remove();
-      if (!busy) btn.disabled = missing.length > 0 || amount > balance;
+      if (!busy) lock(btn, missing.length > 0 || amount > balance);
       payMissing.textContent = missing.length ? 'Still needed: ' + missing.join(', ') : '';
       payMissing.hidden = !missing.length;
       return missing;
@@ -2186,8 +2192,9 @@
       if (cash && e.payee_type !== 'OUTLET_CASH') warnings.push('Cash: an owner will be asked to confirm it afterwards.');
 
       const tick = h('input', { type: 'checkbox', id: 'pay_checked' });
-      const confirmBtn = h('button.btn.btn-approve.btn-big', { type: 'button', text: partial ? 'Confirm partial payment' : 'Confirm and mark as paid', disabled: true });
-      tick.addEventListener('change', function () { confirmBtn.disabled = !tick.checked || busy; });
+      const confirmBtn = h('button.btn.btn-approve.btn-big', { type: 'button', text: partial ? 'Confirm partial payment' : 'Confirm and mark as paid' });
+      lock(confirmBtn, true);
+      tick.addEventListener('change', function () { lock(confirmBtn, !tick.checked); if (busy) confirmBtn.disabled = true; });
       confirmBtn.addEventListener('click', function () { submit(confirmBtn); });
       const row = function (k, v) { return h('div.kv', {}, [h('span.k', { text: k }), h('span.v', { text: v || '—' })]); };
       const proofSrc = proof && proof.mime.indexOf('image/') === 0 ? 'data:' + proof.mime + ';base64,' + proof.base64 : null;
@@ -2436,7 +2443,7 @@
         if (showAll) touched[name] = true;
         if (touched[name]) { showError(name, REQUIRED[name][1]); shownRequired[name] = true; }
       });
-      if (!submitting) submitBtn.disabled = missing.length > 0;
+      if (!submitting) lock(submitBtn, missing.length > 0);
       missingLine.textContent = missing.length ? 'Still needed: ' + missing.join(', ') : '';
       missingLine.hidden = !missing.length;
       return missing;
