@@ -251,11 +251,11 @@
     ]);
   }
 
-  /** Summary tiles at the top of a tab. tiles: [{value, label, brand?, alert?}] */
+  /** Summary tiles at the top of a tab. tiles: [{value, label, brand?, alert? (red), warn? (amber)}] */
   function stats(tiles) {
     tiles = tiles.filter(Boolean);
     return h('div.stats.stats-' + tiles.length, {}, tiles.map(function (t) {
-      return h('div.stat' + (t.brand ? '.stat-hero' : '') + (t.alert ? '.alert' : ''), {}, [
+      return h('div.stat' + (t.brand ? '.stat-hero' : '') + (t.alert ? '.alert' : '') + (t.warn ? '.warn' : ''), {}, [
         h('div.stat-value', { text: String(t.value) }),
         h('div.stat-label', { text: t.label }),
       ]);
@@ -555,7 +555,7 @@
     } else {
       body = [
         stats([
-          { value: byStatus(['NEEDS_INFO']).length, label: 'Need info', alert: byStatus(['NEEDS_INFO']).length > 0 },
+          { value: byStatus(['NEEDS_INFO']).length, label: 'Need info', warn: byStatus(['NEEDS_INFO']).length > 0 },
           { value: byStatus(['PENDING_APPROVAL']).length, label: 'Pending' },
           { value: byStatus(['APPROVED', 'PARTIAL']).length, label: 'To be paid' },
         ]),
@@ -706,7 +706,7 @@
         h('span', { text: x.entry_id }),
         h('span', { text: fmtDate(x.entry_date) }),
         x.entry_type === 'SPEND' ? h('span', { text: x.has_doc ? 'Receipt attached' : 'No receipt' }) : null,
-        x.voided ? h('span.due.overdue', { text: 'Cancelled' }) : null,
+        x.voided ? h('span', { text: 'Cancelled' }) : null,
       ]),
     ])]);
   }
@@ -799,7 +799,7 @@
         { value: fmtMoney(c.spentSinceDeposit), label: 'Spent since deposit' },
         { value: c.lastCount ? (c.lastCount.difference ? signedMoney(c.lastCount.difference) : 'Matched') : '—', label: c.lastCount ? 'Last count · ' + fmtDate(c.lastCount.date) : 'Last count' },
       ]),
-      low ? h('div.flag', { text: 'The cash box is low.' + (Number(c.spentSinceDeposit) > 0
+      low ? h('div.flag.warn', { text: 'The cash box is low.' + (Number(c.spentSinceDeposit) > 0
         ? ' To refill it, the next deposit should be about ' + fmtMoney(c.spentSinceDeposit) + ' (what was spent since the last deposit).' : '') }) : null,
       c.can.spend ? h('a.btn.btn-primary.btn-big', { href: '#/cash-spend' }, ['+ Record a cash spend']) : null,
       c.can.deposit || c.can.count ? h('div.row.cash-actions', {}, [
@@ -1395,7 +1395,7 @@
   function drawCashEntry(back, x) {
     const row = function (k, v) { return v ? h('div.kv', {}, [h('span.k', { text: k }), h('span.v', { text: v })]) : null; };
     const doc = x.entry_type === 'SPEND' || x.attachment
-      ? (x.attachment ? attachmentView(x.attachment) : h('div.doc-missing', { text: 'No receipt: ' + label('no_doc_reason', x.no_doc_reason) + (x.no_doc_note ? ' — ' + x.no_doc_note : '') }))
+      ? (x.attachment ? attachmentView(x.attachment) : h('div.doc-missing.none', { text: 'No receipt: ' + label('no_doc_reason', x.no_doc_reason) + (x.no_doc_note ? ' — ' + x.no_doc_note : '') }))
       : null;
     const more = (x.extra_files || []).length ? [h('p.section-title.more-files', { text: 'More files (' + x.extra_files.length + ')' })].concat(
       x.extra_files.map(function (f, i) { return h('div.extra-file', {}, [attachmentView(f, 'extra-' + i)]); })) : [];
@@ -1405,7 +1405,7 @@
       h('div.detail-grid', {}, [
         doc ? h('div.detail-media', {}, [doc].concat(more)) : null,
         h('div.detail-side', {}, [
-          x.voided ? h('div.flag', { text: 'This entry was cancelled. See the cancelling entry in the list.' }) : null,
+          x.voided ? h('div.flag.warn', { text: 'This entry was cancelled. See the cancelling entry in the list.' }) : null,
           h('div.card', {}, [
             h('div.item-top', {}, [h('span.amount.big', { text: x.entry_type === 'DEPOSIT' && x.status !== 'RECEIVED' ? fmtMoney(x.amount) : signedMoney(x.effect) }),
               cashChip(x)]),
@@ -1458,7 +1458,7 @@
 
   function attachmentView(att, slot) {
     if (att && att.pending) return h('div.doc-missing.doc-loading', { 'data-slot': slot || 'attachment' }, [h('div.spinner'), h('span', { text: 'Loading photo…' })]);
-    if (!att) return h('div.doc-missing', { text: 'No document attached' });
+    if (!att) return h('div.doc-missing.none', { text: 'No document attached' });
     if (att.error) return h('div.doc-missing', { text: att.error });
     const url = URL.createObjectURL(base64ToBlob(att.base64, att.mime));
     if (att.mime === 'application/pdf') {
@@ -1500,6 +1500,8 @@
     PAYMENT_PROBLEM: 'Problem reported with the payment', PAYMENT_PROBLEM_CLOSED: 'Payment problem closed',
   };
 
+  // Flags that ask for a look, not errors: amber, as the warnings of the payment check. Every other flag stays red.
+  const WARNING_FLAGS = ['NO_DOCUMENT', 'NEW_SUPPLIER'];
   // The same words as on the form and the payment button.
   const REQUEST_TYPE_LABEL = { INVOICE: 'Already bought', PURCHASE_REQUEST: 'Not bought yet' };
   /** "Full payment" when it is the only one of a paid expense, "Final payment" for the one that completed it, else "Partial payment". */
@@ -1624,7 +1626,7 @@
         e.extra_files.map(function (f, i) { return h('div.extra-file', {}, [attachmentView(f, 'extra-' + i)]); })) : [])),
       h('div.detail-side', {}, [
       e.flags.length ? h('div.flags', {}, e.flags.map(function (f) {
-        return f.level === 'info' ? h('div.flag.info', { text: f.message }) : h('div.flag', { text: f.message });
+        return h('div.flag' + (f.level === 'info' ? '.info' : WARNING_FLAGS.indexOf(f.code) !== -1 ? '.warn' : ''), { text: f.message });
       })) : null,
       h('div.card', { 'data-status': e.status }, [
         h('div.item-top', {}, [h('span.amount.big', { text: fmtMoney(e.amount_total) }), statusChip(e.status)]),
@@ -1651,7 +1653,7 @@
       ]),
       e.can.decide ? decisionPanel(e) : null,
       e.can.approveSupplier ? supplierApprovalCard(e) : null,
-      e.pay_blocked ? h('div.flag', { text: e.pay_blocked }) : null,
+      e.pay_blocked ? h('div.flag.warn', { text: e.pay_blocked }) : null,
       e.pay_to && e.can.pay ? payToCard(e.pay_to) : null,
       e.can.pay ? paymentPanel(e) : null,
       e.can.requestReview ? reviewRequestPanel(e) : null,
