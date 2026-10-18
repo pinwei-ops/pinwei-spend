@@ -502,6 +502,11 @@
       const total = q.reduce(function (sum, e) { return sum + (Number(e.balance_due) || 0); }, 0);
       const overdueN = q.filter(isOverdue).length;
       const partialN = q.filter(function (e) { return e.status === 'PARTIAL'; }).length;
+      // Bank orders: where each transfer stands in the bank (to create, or waiting for the release).
+      const bank = bankOrdersOn();
+      const candidates = q.filter(function (e) { return !e.bank_order_at; });
+      const waitN = q.length - candidates.length;
+      const markButton = candidates.length ? h('button.btn.bank-mark', { type: 'button', text: 'Mark bank orders created…', onclick: function () { bankSelect = {}; renderHome(true); } }) : null;
       let listPart;
       let lateList = null;      // everything to pay: what is overdue stands first, as its own list, never cut short
       if (payShow === 'PAID') {
@@ -513,34 +518,41 @@
       } else {
         const shown = q.filter(function (e) {
           if (payShow === 'OVERDUE') return isOverdue(e);
+          if (payShow === 'BANK_TODO') return !e.bank_order_at;
+          if (payShow === 'BANK_WAIT') return Boolean(e.bank_order_at);
           return !payShow || e.status === payShow;
         });
-        const title = { '': 'Approved, waiting for payment', APPROVED: 'Approved, nothing paid yet', PARTIAL: 'Partially paid', OVERDUE: 'Overdue' }[payShow];
+        const title = { '': 'Approved, waiting for payment', APPROVED: 'Approved, nothing paid yet', PARTIAL: 'Partially paid', OVERDUE: 'Overdue',
+          BANK_TODO: 'To create a bank order', BANK_WAIT: 'Waiting for ' + bankApprover() + ' to release in the bank' }[payShow];
         const late = payShow ? [] : shown.filter(isOverdue);
         const rest = shown.filter(function (e) { return late.indexOf(e) === -1; });
         lateList = section('Overdue', late, { showSubmitter: true, alert: true, all: true });
         listPart = [late.length && !rest.length ? null
           : section(title, rest, { showEmpty: true, empty: payShow ? 'Nothing here.' : 'Nothing to pay.', showSubmitter: true, alert: payShow === 'OVERDUE' })];
-        if (!payShow && bankOrdersOn()) {
-          // Everything to pay, split by where the transfer stands in the bank.
+        if (bank && bankSelect && (!payShow || payShow === 'BANK_TODO')) {
+          lateList = null;
+          listPart = [bankSelectView(candidates)];
+        } else if (bank && !payShow) {
+          // Everything to pay, split by where the transfer stands in the bank. The button sits right under Show and Sort.
           const toCreate = rest.filter(function (e) { return !e.bank_order_at; });
           const waiting = rest.filter(function (e) { return e.bank_order_at; });
-          const candidates = q.filter(function (e) { return !e.bank_order_at; });
-          if (bankSelect) {
-            lateList = null;
-            listPart = [bankSelectView(candidates)];
-          } else {
-            listPart = [
-              // Right under Show and Sort, where the eye is when the list starts.
-              candidates.length ? h('button.btn.bank-mark', { type: 'button', text: 'Mark bank orders created…', onclick: function () { bankSelect = {}; renderHome(true); } }) : null,
-              section('To create a bank order', toCreate, { showEmpty: !late.length && !waiting.length, empty: 'Nothing to pay.', showSubmitter: true }),
-              section('Waiting for ' + bankApprover() + ' to release in the bank', waiting, { showSubmitter: true }),
-            ];
-          }
+          listPart = [
+            markButton,
+            section('To create a bank order', toCreate, { showEmpty: !late.length && !waiting.length, empty: 'Nothing to pay.', showSubmitter: true }),
+            section('Waiting for ' + bankApprover() + ' to release in the bank', waiting, { showSubmitter: true }),
+          ];
+        } else if (bank && payShow === 'BANK_TODO') {
+          listPart = [markButton].concat(listPart);
         }
       }
       body = [
-        stats([
+        stats(bank ? [
+          // Where the transfers stand; the exact amount outstanding is on the line under the tiles.
+          { value: q.length, label: 'To pay', brand: true },
+          { value: candidates.length, label: 'To create an order' },
+          { value: waitN, label: 'Waiting for ' + bankApprover() },
+          { value: overdueN, label: 'Overdue', alert: overdueN > 0 },
+        ] : [
           { value: q.length, label: 'To pay', brand: true },
           { value: fmtShort(total), label: 'Outstanding' },
           { value: overdueN, label: 'Overdue', alert: overdueN > 0 },
@@ -549,7 +561,15 @@
         q.length ? h('p.queue-total', { text: 'Outstanding: ' + fmtMoney(total) }) : null,
         lateList,
         section('Payment problems to sort out', state.views.to_fix || [], { showSubmitter: true }),
-        listControls(showFilter(payShow, [
+        listControls(showFilter(payShow, bank ? [
+          // In the order the work goes: create the order, wait for the release, then paid.
+          ['', 'Everything to pay (' + q.length + ')'],
+          ['BANK_TODO', 'To create a bank order (' + candidates.length + ')'],
+          ['BANK_WAIT', 'Waiting for ' + bankApprover() + ' to release (' + waitN + ')'],
+          ['OVERDUE', 'Overdue (' + overdueN + ')'],
+          ['PARTIAL', 'Partially paid (' + partialN + ')'],
+          ['PAID', 'Paid in the last 30 days'],
+        ] : [
           ['', 'Everything to pay (' + q.length + ')'],
           ['APPROVED', 'Approved, nothing paid yet (' + (q.length - partialN) + ')'],
           ['PARTIAL', 'Partially paid (' + partialN + ')'],
