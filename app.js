@@ -243,6 +243,7 @@
           h('span', { text: fmtDate(e.created_at) }),
           showSubmitter ? h('span', { text: e.submitted_by_name + ' · ' + e.outlet_code }) : h('span', { text: 'To ' + e.send_to_name }),
           e.due_date && OPEN_STATUSES.indexOf(e.status) !== -1 ? h('span.due' + (overdue ? '.overdue' : ''), { text: (overdue ? 'Overdue · ' : 'Due ') + fmtDate(e.due_date) }) : null,
+          bankOrderWaits(e) ? h('span.bank-order', { text: 'Bank order · ' + fmtDate(e.bank_order_at) }) : null,
         ]),
         e.status === 'NEEDS_INFO' && e.info_request ? h('div.item-note', { text: 'Requested: ' + e.info_request }) : null,
         e.status === 'REJECTED' && e.rejection_reason ? h('div.item-note.bad', { text: 'Rejected: ' + e.rejection_reason }) : null,
@@ -250,6 +251,12 @@
       ]),
     ]);
   }
+
+  // Bank orders: the accountant creates the transfer in the bank, the bank approver releases it there,
+  // then the payment is recorded. In between the expense carries bank_order_at.
+  function bankOrdersOn() { return Boolean(state.limits && state.limits.bankOrders); }
+  function bankApprover() { return (state.limits && state.limits.bankOrderApprover) || 'the bank approver'; }
+  function bankOrderWaits(e) { return bankOrdersOn() && Boolean(e.bank_order_at) && (e.status === 'APPROVED' || e.status === 'PARTIAL'); }
 
   /** Summary tiles at the top of a tab. tiles: [{value, label, brand?, alert? (red), warn? (amber)}] */
   function stats(tiles) {
@@ -338,7 +345,7 @@
 
   /** A "Show: …" dropdown above a list. options: [[value, label], …] */
   function showFilter(value, options, onChange) {
-    const sel = h('select.input', { 'aria-label': 'Show', onchange: function () { onChange(sel.value); shownMore = {}; renderHome(true); } },
+    const sel = h('select.input', { 'aria-label': 'Show', onchange: function () { onChange(sel.value); shownMore = {}; bankSelect = null; renderHome(true); } },
       options.map(function (o) { return h('option', { value: o[0], text: o[1] }); }));
     sel.value = value;
     return h('label.show-filter', {}, [h('span.show-label', { text: 'Show' }), sel]);
@@ -461,7 +468,7 @@
       homeTab = (own || tabDefs.find(function (t) { return t.key !== 'mine' && t.count; }) || { key: 'mine' }).key;
     }
     const tabs = tabDefs.length > 1 ? h('div.tabs', { role: 'tablist', style: 'grid-template-columns: repeat(' + tabDefs.length + ', 1fr)' }, tabDefs.map(function (t) {
-      return h('button.tab' + (homeTab === t.key ? '.on' : ''), { type: 'button', role: 'tab', 'aria-selected': homeTab === t.key ? 'true' : 'false', onclick: function () { homeTab = t.key; shownMore = {}; renderHome(); } },
+      return h('button.tab' + (homeTab === t.key ? '.on' : ''), { type: 'button', role: 'tab', 'aria-selected': homeTab === t.key ? 'true' : 'false', onclick: function () { homeTab = t.key; shownMore = {}; bankSelect = null; renderHome(); } },
         [t.label, t.count ? h('span.count', { text: String(t.count) }) : null]);
     })) : null;
 
@@ -488,6 +495,7 @@
         section('Cash payments to post-check', state.views.to_check || [], { showSubmitter: true }),
         section('Waiting for the owners', theirPending, { showSubmitter: true }),
         section('Cash checks waiting for the owners', theirChecks, { showSubmitter: true }),
+        section('Waiting for you to release in the bank', state.views.bank_waiting || [], { showSubmitter: true }),
       ];
     } else if (homeTab === 'pay') {
       const q = state.views.to_pay;
@@ -513,6 +521,22 @@
         lateList = section('Overdue', late, { showSubmitter: true, alert: true, all: true });
         listPart = [late.length && !rest.length ? null
           : section(title, rest, { showEmpty: true, empty: payShow ? 'Nothing here.' : 'Nothing to pay.', showSubmitter: true, alert: payShow === 'OVERDUE' })];
+        if (!payShow && bankOrdersOn()) {
+          // Everything to pay, split by where the transfer stands in the bank.
+          const toCreate = rest.filter(function (e) { return !e.bank_order_at; });
+          const waiting = rest.filter(function (e) { return e.bank_order_at; });
+          const candidates = q.filter(function (e) { return !e.bank_order_at; });
+          if (bankSelect) {
+            lateList = null;
+            listPart = [bankSelectView(candidates)];
+          } else {
+            listPart = [
+              section('To create a bank order', toCreate, { showEmpty: !late.length && !waiting.length, empty: 'Nothing to pay.', showSubmitter: true }),
+              candidates.length ? h('button.btn.btn-rows', { type: 'button', text: 'Mark bank orders created…', onclick: function () { bankSelect = {}; renderHome(true); } }) : null,
+              section('Waiting for ' + bankApprover() + ' to release in the bank', waiting, { showSubmitter: true }),
+            ];
+          }
+        }
       }
       body = [
         stats([
@@ -602,6 +626,52 @@
     // More tabs than fit (the admin on a narrow phone): the chosen one is brought into the bar.
     const on = tabs && tabs.querySelector('.on');
     if (on) tabs.scrollLeft = Math.max(0, on.getBoundingClientRect().right - tabs.getBoundingClientRect().right);
+  }
+
+  let bankSelect = null;   // expense id → ticked, while the accountant marks bank orders; null = not marking
+
+  /** The accountant ticks the expenses she created bank orders for, then marks them in one go. */
+  function bankSelectView(candidates) {
+    const picked = function () { return candidates.filter(function (e) { return bankSelect[e.expense_id]; }); };
+    const go = h('button.btn.btn-primary.btn-big', { type: 'button' });
+    function paint() {
+      const p = picked();
+      go.disabled = !p.length;
+      go.textContent = p.length ? 'Mark ' + p.length + ' as created · ' + fmtMoney(sum(p, 'balance_due')) : 'Tick the orders you created';
+    }
+    const rows = sortItems(candidates).map(function (e) {
+      const late = isOverdue(e);
+      const box = h('input', { type: 'checkbox', checked: Boolean(bankSelect[e.expense_id]), 'aria-label': e.expense_id,
+        onchange: function () { bankSelect[e.expense_id] = box.checked; paint(); } });
+      return h('label.item.bank-pick' + (late ? '.overdue' : ''), {}, [box, h('div.item-body', {}, [
+        h('div.item-top', {}, [h('span.amount', { text: fmtMoney(e.balance_due) }), statusChip(e.status)]),
+        h('div.item-mid', { text: e.supplier_name || e.payee_name || ('Pay back ' + e.submitted_by_name) }),
+        h('div.item-meta', {}, [
+          h('span', { text: e.expense_id }),
+          h('span', { text: e.submitted_by_name + ' · ' + e.outlet_code }),
+          e.due_date ? h('span.due' + (late ? '.overdue' : ''), { text: (late ? 'Overdue · ' : 'Due ') + fmtDate(e.due_date) }) : null,
+        ]),
+      ])]);
+    });
+    go.addEventListener('click', async function () {
+      const ids = picked().map(function (e) { return e.expense_id; });
+      if (!ids.length) return;
+      go.disabled = true;
+      go.textContent = 'Saving…';
+      try {
+        const res = await Api.call('bankOrder', { ids: ids });
+        res.expenses.forEach(function (e) { upsert('to_pay', e); });
+        bankSelect = null;
+        toast((ids.length === 1 ? '1 bank order' : ids.length + ' bank orders') + ' marked · ' + bankApprover() + ' is told', 'ok');
+        renderHome(true);
+      } catch (err) { toast(err.message); paint(); }
+    });
+    paint();
+    return h('section.section', {}, [
+      h('h2.section-title', { text: 'Which bank orders did you create?' }),
+      h('div.list', {}, rows),
+      h('div.bank-pick-actions', {}, [go, h('button.btn', { type: 'button', text: 'Cancel', onclick: function () { bankSelect = null; renderHome(true); } })]),
+    ]);
   }
 
   /** Owner/admin timeline across every outlet (spec §8), loaded on first open. */
@@ -1662,12 +1732,14 @@
         row('Decided by', ['APPROVED', 'PARTIAL', 'PAID', 'CLOSED', 'REJECTED', 'NEEDS_INFO'].indexOf(e.status) !== -1 ? e.approver_name : ''),
         row('Paid so far', Number(e.amount_paid) ? fmtMoney(e.amount_paid) : ''),
         row('Balance due', e.status === 'PARTIAL' ? fmtMoney(e.balance_due) : ''),
+        row('Bank order', bankOrderWaits(e) ? 'Created ' + fmtDateTime(e.bank_order_at) + (e.bank_order_by_name ? ' by ' + e.bank_order_by_name : '') + ' · waiting for ' + bankApprover() + ' to release it' : ''),
         row('ID', e.expense_id),
       ]),
       e.can.decide ? decisionPanel(e) : null,
       e.can.approveSupplier ? supplierApprovalCard(e) : null,
       e.pay_blocked ? h('div.flag.warn', { text: e.pay_blocked }) : null,
       e.pay_to && e.can.pay ? payToCard(e.pay_to) : null,
+      bankOrdersOn() && (e.can.bankOrder || e.can.cancelBankOrder) ? bankOrderPanel(e) : null,
       e.can.pay ? paymentPanel(e) : null,
       e.can.requestReview ? reviewRequestPanel(e) : null,
       e.can.postCheck ? postCheckPanel(e) : null,
@@ -1904,6 +1976,37 @@
         renderExpense(e.expense_id);
       },
     });
+  }
+
+  /** The accountant marks the transfer order created in the bank, or moves a cancelled one back. */
+  function bankOrderPanel(e) {
+    if (e.can.cancelBankOrder) {
+      return confirmPanel({
+        open: 'Bank order cancelled or refused? Move it back',
+        intro: 'It goes back to the bank orders to create.',
+        label: 'Why? (optional)', placeholder: 'e.g. Wrong amount in the order',
+        confirm: 'Move it back',
+        run: async function (reason) {
+          const res = await Api.call('cancelBankOrder', { id: e.expense_id, reason: reason });
+          upsert('to_pay', res.expense);
+          state.detail = null;
+          toast('Moved back: ' + e.expense_id, 'ok');
+          renderExpense(e.expense_id);
+        },
+      });
+    }
+    const btn = h('button.btn', { type: 'button', text: 'Bank order created' });
+    btn.addEventListener('click', async function () {
+      btn.disabled = true;
+      try {
+        const res = await Api.call('bankOrder', { ids: [e.expense_id] });
+        upsert('to_pay', res.expenses[0]);
+        state.detail = null;
+        toast('Bank order marked · ' + bankApprover() + ' is told', 'ok');
+        renderExpense(e.expense_id);
+      } catch (err) { toast(err.message); btn.disabled = false; }
+    });
+    return h('div.decide', {}, [h('p.confirm-text', { text: 'Created the transfer order in the bank? Mark it, and ' + bankApprover() + ' is told to release it.' }), btn]);
   }
 
   /** The accountant closes a reported payment problem by writing how it was sorted out. */
