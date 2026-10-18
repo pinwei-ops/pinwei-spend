@@ -531,8 +531,9 @@
             listPart = [bankSelectView(candidates)];
           } else {
             listPart = [
+              // Right under Show and Sort, where the eye is when the list starts.
+              candidates.length ? h('button.btn.bank-mark', { type: 'button', text: 'Mark bank orders created…', onclick: function () { bankSelect = {}; renderHome(true); } }) : null,
               section('To create a bank order', toCreate, { showEmpty: !late.length && !waiting.length, empty: 'Nothing to pay.', showSubmitter: true }),
-              candidates.length ? h('button.btn.btn-rows', { type: 'button', text: 'Mark bank orders created…', onclick: function () { bankSelect = {}; renderHome(true); } }) : null,
               section('Waiting for ' + bankApprover() + ' to release in the bank', waiting, { showSubmitter: true }),
             ];
           }

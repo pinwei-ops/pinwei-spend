@@ -171,6 +171,7 @@ a.item .item-mid { white-space: normal; display: -webkit-box; -webkit-box-orient
 .bank-pick input[type=checkbox] { width: 22px; height: 22px; margin: 2px 0 0; flex: 0 0 auto; accent-color: var(--accent); }
 .list > .bank-pick + .bank-pick { border-top: 1px solid var(--line); }
 .bank-pick-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.bank-mark { width: 100%; margin: 0 0 4px; }
 .section-title.alert { color: var(--bad); }
 .section-title.alert .count { background: var(--bad-bg); color: var(--bad); }
 .item-note { margin-top: 8px; padding: 6px 10px; border-left: 3px solid var(--st-needs); background: var(--st-needs-bg); color: var(--st-needs); font-size: .85rem; font-weight: 500; }
