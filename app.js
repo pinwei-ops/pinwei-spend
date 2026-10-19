@@ -1576,22 +1576,77 @@
     return h('div.doc', {}, [open, h('p.hint.center-text', { text: 'Tap the photo to zoom' })]);
   }
 
-  /** Full-size photo. The phone's Back button closes it (not the expense); tap to zoom in and out. */
+  /**
+   * A photo on top of the page, fitted to the screen. − and + (or a tap on the photo) zoom, and a zoomed
+   * photo scrolls; Previous and Next go through the expense's photos. Close, Esc, a tap on the dark edge
+   * or the phone's Back button close it (not the expense).
+   */
   function openViewer(url) {
-    const viewer = h('div.viewer');
+    const pics = [].map.call(document.querySelectorAll('img.doc-img'), function (i) { return i.src; });
+    const list = pics.indexOf(url) !== -1 ? pics : [url];
+    let at = list.indexOf(url);
+    let zoom = 1;
+    const STEPS = [1, 1.5, 2, 3, 4];
+    const viewer = h('div.viewer', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Photo' });
+    const img = h('img.viewer-img', { alt: 'Photo, full size' });
+    const stage = h('div.viewer-stage', {}, [img]);
+    const count = h('span.viewer-count');
+    const btn = function (text, label, fn) { return h('button.viewer-btn', { type: 'button', text: text, 'aria-label': label, onclick: fn }); };
+    const prev = btn('Previous', 'Previous photo', function () { show(at - 1); });
+    const next = btn('Next', 'Next photo', function () { show(at + 1); });
+    const out = btn('−', 'Zoom out', function () { setZoom(STEPS[Math.max(0, STEPS.indexOf(zoom) - 1)]); });
+    const fit = btn('Fit', 'Fit to the screen', function () { setZoom(1); });
+    const inn = btn('+', 'Zoom in', function () { setZoom(STEPS[Math.min(STEPS.length - 1, STEPS.indexOf(zoom) + 1)]); });
+    const save = h('a.viewer-btn', { text: 'Download' });
     let closed = false;
     function close() {
       if (closed) return;
       closed = true;
       window.removeEventListener('popstate', close);
+      document.removeEventListener('keydown', keys);
       viewer.remove();
     }
+    // Zoomed: a width in pixels from the fitted size, so the photo can be scrolled; fitted: CSS keeps it on screen.
+    function size() {
+      if (zoom === 1 || !img.naturalWidth) {
+        img.style.width = ''; img.style.maxWidth = ''; img.style.maxHeight = '';
+      } else {
+        const fitted = Math.min(stage.clientWidth / img.naturalWidth, stage.clientHeight / img.naturalHeight, 1);
+        img.style.maxWidth = 'none'; img.style.maxHeight = 'none';
+        img.style.width = Math.round(img.naturalWidth * fitted * zoom) + 'px';
+      }
+      img.classList.toggle('zoomed', zoom > 1);
+      out.disabled = zoom === 1; fit.disabled = zoom === 1; inn.disabled = zoom === STEPS[STEPS.length - 1];
+    }
+    function setZoom(z) { zoom = z; size(); }
+    function show(i) {
+      at = (i + list.length) % list.length;
+      zoom = 1;
+      img.src = list[at];
+      save.href = list[at];
+      save.setAttribute('download', 'photo-' + (at + 1) + '.jpg');
+      count.textContent = list.length > 1 ? (at + 1) + ' / ' + list.length : '';
+      size();
+    }
+    function keys(ev) {
+      if (ev.key === 'Escape') history.back();
+      else if (ev.key === 'ArrowLeft' && list.length > 1) show(at - 1);
+      else if (ev.key === 'ArrowRight' && list.length > 1) show(at + 1);
+      else if (ev.key === '+' || ev.key === '=') inn.click();
+      else if (ev.key === '-') out.click();
+    }
+    img.addEventListener('load', size);
+    img.addEventListener('click', function () { setZoom(zoom === 1 ? 2 : 1); });
+    stage.addEventListener('click', function (ev) { if (ev.target === stage) history.back(); });
+    prev.hidden = next.hidden = list.length < 2;
+    viewer.appendChild(h('div.viewer-bar.top', {}, [count, h('button.viewer-btn.viewer-close', { type: 'button', text: 'Close', onclick: function () { history.back(); } })]));
+    viewer.appendChild(stage);
+    viewer.appendChild(h('div.viewer-bar', {}, [prev, out, fit, inn, save, next]));
     history.pushState({ viewer: true }, '');
     window.addEventListener('popstate', close);
-    const img = h('img', { src: url, alt: 'Invoice, full size', onclick: function () { img.classList.toggle('zoomed'); } });
-    viewer.appendChild(img);
-    viewer.appendChild(h('button.viewer-close', { type: 'button', text: 'Close', onclick: function () { history.back(); } }));
+    document.addEventListener('keydown', keys);
     document.body.appendChild(viewer);
+    show(at);
   }
 
   const ACTION_LABEL = {

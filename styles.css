@@ -344,9 +344,19 @@ details.more-inline[open] > .input { margin-top: 6px; }
 .spinner { width: 30px; height: 30px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 .center-block { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 48px 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.viewer { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 40; overflow: auto; background: rgba(0,0,0,.92); touch-action: pinch-zoom; }
-.viewer img { display: block; max-width: none; width: 100%; min-height: 100%; object-fit: contain; }
-.viewer-close { position: fixed; top: max(12px, env(safe-area-inset-top)); right: 12px; z-index: 41; padding: 10px 14px; border: 0; border-radius: 999px; background: rgba(255,255,255,.92); color: #000; font-weight: 600; }
+/* Photo viewer: the photo fitted to the screen on a dark backdrop, bars above and below */
+.viewer { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 40; display: flex; flex-direction: column; background: rgba(10,12,28,.88); }
+.viewer-stage { flex: 1; min-height: 0; display: flex; overflow: auto; padding: 8px 16px; touch-action: pinch-zoom; }
+.viewer-img { display: block; margin: auto; max-width: min(100%, 1100px); max-height: 100%; object-fit: contain; border-radius: 6px; background: #fff; box-shadow: 0 10px 40px rgba(0,0,0,.45); cursor: zoom-in; }
+.viewer-img.zoomed { cursor: zoom-out; border-radius: 0; }
+.viewer-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; padding: 10px 16px max(10px, env(safe-area-inset-bottom)); }
+.viewer-bar.top { justify-content: space-between; padding-top: max(10px, env(safe-area-inset-top)); padding-bottom: 6px; }
+.viewer-count { color: #fff; font-weight: 600; font-size: .9rem; }
+.viewer-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 8px 16px; border: 1px solid rgba(255,255,255,.45); border-radius: 999px; background: rgba(255,255,255,.08); color: #fff; font: inherit; font-weight: 600; text-decoration: none; cursor: pointer; }
+.viewer-btn:hover { background: rgba(255,255,255,.18); }
+.viewer-btn:disabled { opacity: .35; cursor: default; }
+.viewer-btn[hidden] { display: none; }
+.viewer-close { margin-left: auto; background: #fff; color: #10142a; border-color: #fff; }
 
 /* ---------------------------------------------------------- misc */
 .inapp p { margin: 0 0 12px; }
@@ -449,7 +459,6 @@ details.more-inline[open] > .input { margin-top: 6px; }
 .doc-open { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
 .doc-links { display: flex; flex-direction: column; gap: 8px; }
 /* M6: tap the full-size photo to zoom, scroll to pan. */
-.viewer img.zoomed { width: 250%; min-height: 0; cursor: zoom-out; }
 /* M7: comfortable tap targets. */
 .topbar .link, .brand { min-height: 44px; }
 .back { display: inline-flex; align-items: center; min-height: 44px; padding-right: 12px; }
