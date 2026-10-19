@@ -1619,6 +1619,8 @@
         img.style.width = Math.round(img.naturalWidth * fitted * zoom) + 'px';
       }
       img.classList.toggle('zoomed', zoom > 1);
+      // Zoomed, a finger moves the photo freely (in every direction, as a hand tool); fitted, the phone's own pinch works.
+      stage.style.touchAction = zoom > 1 ? 'none' : '';
       out.disabled = zoom === 1; fit.disabled = zoom === 1; inn.disabled = zoom === STEPS[STEPS.length - 1];
     }
     function setZoom(z) { zoom = z; size(); }
@@ -1639,7 +1641,7 @@
       else if (ev.key === '-') out.click();
     }
     img.addEventListener('load', size);
-    // A click zooms in where it points; a zoomed photo is moved by dragging it (the mouse's hand), or scrolled.
+    // A click zooms in where it points; a zoomed photo is moved by dragging it (mouse or finger), or scrolled.
     img.setAttribute('draggable', 'false');
     img.addEventListener('dragstart', function (ev) { ev.preventDefault(); });
     let drag = null;
@@ -1654,7 +1656,7 @@
       stage.scrollTop = img.offsetTop + fy * img.offsetHeight - stage.clientHeight / 2;
     });
     stage.addEventListener('pointerdown', function (ev) {
-      if (ev.pointerType !== 'mouse' || ev.button !== 0 || zoom === 1) return;
+      if (drag || zoom === 1 || (ev.pointerType === 'mouse' && ev.button !== 0)) return;
       drag = { x: ev.clientX, y: ev.clientY, left: stage.scrollLeft, top: stage.scrollTop };
       moved = false;
       stage.setPointerCapture(ev.pointerId);

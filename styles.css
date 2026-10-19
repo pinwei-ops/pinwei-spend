@@ -347,7 +347,7 @@ details.more-inline[open] > .input { margin-top: 6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 /* Photo viewer: the photo fitted to the screen on a dark backdrop, bars above and below */
 .viewer { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 40; display: flex; flex-direction: column; background: rgba(10,12,28,.88); }
-.viewer-stage { flex: 1; min-height: 0; display: flex; overflow: auto; padding: 8px 16px; touch-action: pinch-zoom; }
+.viewer-stage { flex: 1; min-height: 0; display: flex; overflow: auto; padding: 8px 16px; touch-action: manipulation; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .viewer-img { display: block; margin: auto; max-width: min(100%, 1100px); max-height: 100%; object-fit: contain; border-radius: 6px; background: #fff; box-shadow: 0 10px 40px rgba(0,0,0,.45); cursor: zoom-in; }
 .viewer-img.zoomed { cursor: grab; border-radius: 0; user-select: none; }
 .viewer-stage.dragging, .viewer-stage.dragging .viewer-img { cursor: grabbing; }
