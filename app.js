@@ -2237,8 +2237,13 @@
     if (p.proof && p.proof.pending) return h('p.hint', { 'data-proof': p.payment_id, text: 'Loading transfer confirmation…' });
     const proofUrl = p.proof && p.proof.base64 ? URL.createObjectURL(base64ToBlob(p.proof.base64, p.proof.mime)) : null;
     if (!proofUrl) return null;
-    if (p.proof.mime.indexOf('image/') === 0) return h('img.proof-thumb', { src: proofUrl, alt: 'Transfer confirmation', onclick: function () { openViewer(proofUrl); } });
-    return h('a.link', { href: proofUrl, target: '_blank', rel: 'noopener', text: 'Open transfer confirmation (PDF)' });
+    // Saved under the payment's ID, e.g. to send the supplier as proof of payment.
+    const ext = p.proof.mime === 'application/pdf' ? '.pdf' : p.proof.mime === 'image/png' ? '.png' : '.jpg';
+    const save = h('a.link.proof-save', { href: proofUrl, download: 'transfer-' + p.payment_id + ext, text: 'Download transfer confirmation' });
+    if (p.proof.mime.indexOf('image/') === 0) {
+      return h('div.proof', {}, [h('img.proof-thumb', { src: proofUrl, alt: 'Transfer confirmation', onclick: function () { openViewer(proofUrl); } }), save]);
+    }
+    return h('div.proof', {}, [h('a.link', { href: proofUrl, target: '_blank', rel: 'noopener', text: 'Open transfer confirmation (PDF)' }), save]);
   }
 
   function paymentCard(p, e) {
