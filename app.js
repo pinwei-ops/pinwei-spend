@@ -445,7 +445,7 @@
     if (PAYER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'pay', label: 'To pay', count: state.views.to_pay.length + (state.views.to_fix || []).length });
     if (APPROVER_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'approve', label: 'To approve', count: state.views.to_approve.length + (state.views.to_check || []).length + (state.views.for_owners || []).length });
     tabDefs.push({ key: 'mine', label: tabDefs.length ? 'Mine' : 'My expenses', count: byStatus(['NEEDS_INFO']).length });
-    if (ALL_VIEW_ROLES.indexOf(role) !== -1) tabDefs.push({ key: 'all', label: role === 'OUTLET_MANAGER' ? 'Outlet' : 'All', count: 0 });
+    if (ALL_VIEW_ROLES.indexOf(role) !== -1 || state.user.seeAll) tabDefs.push({ key: 'all', label: role === 'OUTLET_MANAGER' ? 'Outlet' : 'All', count: 0 });
     // Petty cash: first for the cash keeper and funder (it is their job), last for everyone else who follows it.
     if (state.user.petty) {
       const cashTab = { key: 'cash', label: 'Cash', count: state.cash ? state.cash.pending.filter(function (x) { return x.can_confirm; }).length : 0 };
