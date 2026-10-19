@@ -218,7 +218,6 @@
   const allFilter = { outlet: '', status: 'OPEN', q: '' };
   let payShow = '';           // "Show" dropdown on the Pay tab
   let mineShow = '';          // "Show" dropdown on the Mine tab
-  let doneShow = '';          // "Show" dropdown on a requester's Done tab
   let homeTab = null;
   let notSaved = [];          // decisions that could not be saved: they stay above the lists until dismissed
 
@@ -244,6 +243,7 @@
           showSubmitter ? h('span', { text: e.submitted_by_name + ' · ' + e.outlet_code }) : h('span', { text: 'To ' + e.send_to_name }),
           e.due_date && OPEN_STATUSES.indexOf(e.status) !== -1 ? h('span.due' + (overdue ? '.overdue' : ''), { text: (overdue ? 'Overdue · ' : 'Due ') + fmtDate(e.due_date) }) : null,
           bankOrderWaits(e) ? h('span.bank-order', { text: 'Bank order · ' + fmtDate(e.bank_order_at) }) : null,
+          (e.status === 'PAID' || e.status === 'CLOSED') && e.paid_at ? h('span.paid-on', { text: 'Paid ' + fmtDate(e.paid_at) }) : null,
         ]),
         e.status === 'NEEDS_INFO' && e.info_request ? h('div.item-note', { text: 'Requested: ' + e.info_request }) : null,
         e.status === 'REJECTED' && e.rejection_reason ? h('div.item-note.bad', { text: 'Rejected: ' + e.rejection_reason }) : null,
@@ -453,14 +453,16 @@
     }
     // Someone who only follows their own expenses (a requester; the cash keeper and funder too) gets them as two tabs:
     // what is still open, and what is done. With a Cash tab next to it, the open one keeps the name "My expenses".
-    const solo = !tabDefs.some(function (t) { return t.key === 'pay' || t.key === 'approve' || t.key === 'all'; });
+    // Someone who mostly follows their own expenses (requester, cash keeper, funder) gets what is paid as its own tab,
+    // next to what is still open. A test account that also sees everything (All) keeps it.
+    const solo = !tabDefs.some(function (t) { return t.key === 'pay' || t.key === 'approve'; }) && ALL_VIEW_ROLES.indexOf(role) === -1;
     if (solo) {
       const at = tabDefs.findIndex(function (t) { return t.key === 'mine'; });
       if (tabDefs.length === 1) tabDefs[at].label = 'Open';
-      tabDefs.splice(at + 1, 0, { key: 'done', label: 'Done', count: 0 });
+      tabDefs.splice(at + 1, 0, { key: 'paid', label: 'Paid', count: 0 });
     }
     if (tabDefs.length >= 4) {                      // phone width: keep tab labels on one line
-      const short = { pay: 'Pay', approve: 'Approve' };
+      const short = { pay: 'Pay', approve: 'Approve', mine: 'Mine' };
       tabDefs.forEach(function (t) { if (short[t.key]) t.label = short[t.key]; });
     }
     if (!homeTab || !tabDefs.some(function (t) { return t.key === homeTab; })) {
@@ -580,23 +582,23 @@
         q.length && payShow !== 'PAID' ? h('button.btn', { type: 'button', text: 'Export list for bank transfers (CSV)', onclick: exportToPay }) : null,
         monthExportRow(),
       ]);
-    } else if (homeTab === 'done') {
-      const DONE_SHOW = { PAID: ['Paid', ['PAID', 'CLOSED']], REJECTED: ['Rejected', ['REJECTED']], CANCELLED: ['Cancelled', ['CANCELLED']] };
-      const done = byStatus(['PAID', 'CLOSED', 'REJECTED', 'CANCELLED']);
-      if (!DONE_SHOW[doneShow]) doneShow = '';
+    } else if (homeTab === 'paid') {
+      // Everything paid in full, the latest payment first. Open one for the payments and the bank's transfer confirmation.
+      const paid = byStatus(['PAID', 'CLOSED']).sort(function (a, b) { return new Date(b.paid_at || 0) - new Date(a.paid_at || 0); });
+      const month = todayVN().slice(0, 7);
+      const thisMonth = paid.filter(function (e) { return e.paid_at && new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(e.paid_at)).slice(0, 7) === month; });
+      const part = firstRows('paid', paid);
       body = [
         stats([
-          { value: byStatus(DONE_SHOW.PAID[1]).length, label: 'Paid', brand: true },
-          { value: byStatus(DONE_SHOW.REJECTED[1]).length, label: 'Rejected' },
-          { value: byStatus(DONE_SHOW.CANCELLED[1]).length, label: 'Cancelled' },
+          { value: paid.length, label: 'Paid', brand: true },
+          { value: fmtShort(sum(thisMonth, 'amount_total')), label: 'Paid this month' },
+          { value: byStatus(['APPROVED', 'PARTIAL']).length, label: 'Still to be paid' },
         ]),
-        h('a.btn.btn-primary.btn-big', { href: '#/new' }, ['+ New expense']),
-        done.length ? listControls(showFilter(doneShow, [['', 'Everything done (' + done.length + ')']].concat(Object.keys(DONE_SHOW).map(function (k) {
-          return [k, DONE_SHOW[k][0] + ' (' + byStatus(DONE_SHOW[k][1]).length + ')'];
-        })), function (v) { doneShow = v; })) : null,
-        DONE_SHOW[doneShow]
-          ? section(DONE_SHOW[doneShow][0], byStatus(DONE_SHOW[doneShow][1]), { showEmpty: true, empty: 'Nothing here.' })
-          : section('Done', done, { showEmpty: true, empty: 'Nothing is done yet.' }),
+        paid.length ? h('section.section', {}, [
+          h('h2.section-title', {}, ['Paid, latest first', h('span.count', { text: String(paid.length) })]),
+          h('div.list', {}, part.rows.map(function (e) { return expenseCard(e, false); })),
+          part.more,
+        ]) : h('p.empty', { text: 'Nothing is paid yet.' }),
       ];
     } else {
       body = [
@@ -615,7 +617,7 @@
         REJECTED: ['Rejected', ['REJECTED']],
         CANCELLED: ['Cancelled', ['CANCELLED']],
       };
-      // With the Done tab next to it (solo), this list holds only what is still open.
+      // With the Paid tab next to it (solo), this list holds what is still open; rejected and cancelled are folded at the bottom.
       const openStatuses = ['DRAFT', 'NEEDS_INFO', 'PENDING_APPROVAL', 'APPROVED', 'PARTIAL'];
       const showKeys = Object.keys(MINE_SHOW).filter(function (k) { return !solo || openStatuses.indexOf(MINE_SHOW[k][1][0]) !== -1; });
       if (showKeys.indexOf(mineShow) === -1) mineShow = '';
@@ -631,7 +633,8 @@
         body.push(
           section('Needs your info', byStatus(['NEEDS_INFO'])),
           section('In progress', byStatus(['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'PARTIAL']), { showEmpty: true, empty: 'Nothing in progress.' }),
-          solo ? null : section('Done', byStatus(['PAID', 'CLOSED', 'REJECTED', 'CANCELLED']), { collapsed: true })
+          solo ? section('Rejected or cancelled', byStatus(['REJECTED', 'CANCELLED']), { collapsed: true })
+            : section('Done', byStatus(['PAID', 'CLOSED', 'REJECTED', 'CANCELLED']), { collapsed: true })
         );
       }
     }
@@ -1636,8 +1639,42 @@
       else if (ev.key === '-') out.click();
     }
     img.addEventListener('load', size);
-    img.addEventListener('click', function () { setZoom(zoom === 1 ? 2 : 1); });
-    stage.addEventListener('click', function (ev) { if (ev.target === stage) history.back(); });
+    // A click zooms in where it points; a zoomed photo is moved by dragging it (the mouse's hand), or scrolled.
+    img.setAttribute('draggable', 'false');
+    img.addEventListener('dragstart', function (ev) { ev.preventDefault(); });
+    let drag = null;
+    let moved = false;
+    img.addEventListener('click', function (ev) {
+      if (moved) { moved = false; return; }
+      if (zoom !== 1) return;
+      const r = img.getBoundingClientRect();
+      const fx = (ev.clientX - r.left) / r.width, fy = (ev.clientY - r.top) / r.height;
+      setZoom(2);
+      stage.scrollLeft = img.offsetLeft + fx * img.offsetWidth - stage.clientWidth / 2;
+      stage.scrollTop = img.offsetTop + fy * img.offsetHeight - stage.clientHeight / 2;
+    });
+    stage.addEventListener('pointerdown', function (ev) {
+      if (ev.pointerType !== 'mouse' || ev.button !== 0 || zoom === 1) return;
+      drag = { x: ev.clientX, y: ev.clientY, left: stage.scrollLeft, top: stage.scrollTop };
+      moved = false;
+      stage.setPointerCapture(ev.pointerId);
+      stage.classList.add('dragging');
+      ev.preventDefault();
+    });
+    stage.addEventListener('pointermove', function (ev) {
+      if (!drag) return;
+      const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+      stage.scrollLeft = drag.left - dx;
+      stage.scrollTop = drag.top - dy;
+    });
+    const endDrag = function () { drag = null; stage.classList.remove('dragging'); };
+    stage.addEventListener('pointerup', endDrag);
+    stage.addEventListener('pointercancel', endDrag);
+    stage.addEventListener('click', function (ev) {
+      if (moved) { moved = false; return; }
+      if (ev.target === stage) history.back();
+    });
     prev.hidden = next.hidden = list.length < 2;
     viewer.appendChild(h('div.viewer-bar.top', {}, [count, h('button.viewer-btn.viewer-close', { type: 'button', text: 'Close', onclick: function () { history.back(); } })]));
     viewer.appendChild(stage);

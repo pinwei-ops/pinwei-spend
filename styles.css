@@ -166,6 +166,7 @@ a.item .item-mid { white-space: normal; display: -webkit-box; -webkit-box-orient
 .item-meta .due.overdue { color: var(--bad); }
 .item.overdue { box-shadow: inset 3px 0 0 var(--bad); }
 .item-meta .bank-order { color: var(--accent); font-weight: 600; }
+.item-meta .paid-on { color: var(--ok); font-weight: 600; }
 /* Ticking the bank orders created */
 .bank-pick { align-items: flex-start; cursor: pointer; }
 .bank-pick input[type=checkbox] { width: 22px; height: 22px; margin: 2px 0 0; flex: 0 0 auto; accent-color: var(--accent); }
@@ -348,7 +349,8 @@ details.more-inline[open] > .input { margin-top: 6px; }
 .viewer { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 40; display: flex; flex-direction: column; background: rgba(10,12,28,.88); }
 .viewer-stage { flex: 1; min-height: 0; display: flex; overflow: auto; padding: 8px 16px; touch-action: pinch-zoom; }
 .viewer-img { display: block; margin: auto; max-width: min(100%, 1100px); max-height: 100%; object-fit: contain; border-radius: 6px; background: #fff; box-shadow: 0 10px 40px rgba(0,0,0,.45); cursor: zoom-in; }
-.viewer-img.zoomed { cursor: zoom-out; border-radius: 0; }
+.viewer-img.zoomed { cursor: grab; border-radius: 0; user-select: none; }
+.viewer-stage.dragging, .viewer-stage.dragging .viewer-img { cursor: grabbing; }
 .viewer-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; padding: 10px 16px max(10px, env(safe-area-inset-bottom)); }
 .viewer-bar.top { justify-content: space-between; padding-top: max(10px, env(safe-area-inset-top)); padding-bottom: 6px; }
 .viewer-count { color: #fff; font-weight: 600; font-size: .9rem; }
