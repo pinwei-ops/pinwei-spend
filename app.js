@@ -2677,8 +2677,10 @@
     const draft = restored ? saved : {};
     const values = editing
       ? Object.assign({}, existing.editable)
-      : Object.assign({ request_type: 'INVOICE', outlet_code: state.user.outletCode, payment_method: 'BANK_TRANSFER' }, draft);
-    if (!state.ref.outlets.some(function (o) { return o.value === values.outlet_code; })) values.outlet_code = state.ref.outlets[0].value;
+      : Object.assign({ request_type: 'INVOICE', outlet_code: '', payment_method: 'BANK_TRANSFER' }, draft);
+    // The outlet is chosen by the person, never in advance (the outlet P/L reads it); with a single outlet there is nothing to choose.
+    const oneOutlet = state.ref.outlets.length === 1;
+    if (!state.ref.outlets.some(function (o) { return o.value === values.outlet_code; })) values.outlet_code = oneOutlet ? state.ref.outlets[0].value : '';
     // A category that left the form (in an unsent draft, or on an older expense): its replacement, or none.
     if (mergedAway(values.expense_category)) values.expense_category = MERGED_CATEGORIES[values.expense_category];
     else if (!editing && HIDDEN_CATEGORIES.indexOf(values.expense_category) !== -1) values.expense_category = '';
@@ -2711,6 +2713,7 @@
     const shownRequired = {};
     let formReady = false;
     const REQUIRED = {
+      outlet_code: ['Outlet', 'Choose the outlet it is for. This field is required.'],
       file: ['Document or reason', 'Attach a photo or PDF, or choose why there is no document.'],
       amount_total: ['Amount', 'Enter the amount. This field is required.'],
       expense_category: ['Category', 'Choose a category. This field is required.'],
@@ -2726,6 +2729,7 @@
       const v = values;
       const filled = function (x) { return Boolean(String(x === undefined || x === null ? '' : x).trim()); };
       return [
+        ['outlet_code', !oneOutlet, filled(v.outlet_code)],
         ['file', true, Boolean(attachment || keptAttachment || extras.length || v.no_doc_reason)],
         ['amount_total', true, Number(v.amount_total) > 0],
         ['expense_category', true, filled(v.expense_category)],
@@ -2879,6 +2883,13 @@
         h('h2.form-step', {}, [h('span.step-num', { text: String(num), 'aria-hidden': 'true' }), titleEl || h('span', { text: title })]),
       ].concat(children));
     }
+
+    // Which outlet it is for: the first question, with the code in front (P5 · Park 5 …), as on every list.
+    const outletField = oneOutlet ? null : field('outlet_code', 'Which outlet is it for?', (function () {
+      const el = select('outlet_code', state.ref.outlets.map(function (o) { return { value: o.value, label: o.value + ' · ' + o.label }; }), 'Choose the outlet');
+      el.addEventListener('change', function () { if (!editing) refreshSendTo(); });
+      return el;
+    })(), 'CK is the central kitchen (for every outlet); HQ is company level: office, software, fees.');
 
     function select(name, options, placeholder) {
       const el = h('select.input', { onchange: function () { set(name, el.value); } },
@@ -3061,6 +3072,14 @@
     function paintDirectNote() { directNote.hidden = values.send_to !== 'ACCOUNTANT'; }
     let sendAuto = false;   // the only option was ticked for the user, not by them
     function refreshSendTo() {
+      if (!values.outlet_code) {
+        values.send_to = '';
+        sendAuto = false;
+        sendToList.textContent = '';
+        sendToList.appendChild(h('p.hint', { text: 'Choose the outlet first (question 1).' }));
+        paintDirectNote();
+        return;
+      }
       // Paying you back and buying something not bought yet both need an approver: no "pay directly".
       const opts = (state.ref.sendTo[values.outlet_code] || []).filter(function (o) {
         return !(o.kind === 'ACCOUNTANT' && (NEEDS_APPROVER.indexOf(values.payee_type) !== -1 || values.request_type === 'PURCHASE_REQUEST'));
@@ -3324,17 +3343,9 @@
     const descField = field('description', 'Description', desc, 'Required when the category is "Other".');
 
     // --- more details
-    const outletField = state.ref.outlets.length > 1
-      ? field('outlet_code', 'Outlet', (function () {
-        const el = select('outlet_code', state.ref.outlets);
-        el.addEventListener('change', function () { if (!editing) refreshSendTo(); });
-        return el;
-      })())
-      : null;
     const redBox = h('input', { type: 'checkbox', checked: Boolean(values.is_red_invoice), onchange: function () { set('is_red_invoice', redBox.checked); } });
     const more = h('details.more', { open: DRAFT_FIELDS.slice(6).some(function (f) { return f !== 'payment_method' && f !== 'outlet_code' && values[f]; }) }, [
       h('summary', { text: 'More details (optional)' }),
-      outletField,
       field('document_type', 'Document type', select('document_type', state.ref.documentTypes, 'Choose…')),
       field('due_date', 'Pay by (due date)', input('due_date', { type: 'date' })),
       field('invoice_no', 'Invoice number', input('invoice_no', { autocomplete: 'off' })),
@@ -3454,7 +3465,7 @@
       editing && existing.status === 'APPROVED' && existing.send_to !== 'ACCOUNTANT'
         ? h('div.item-note', { text: 'Already approved. Changing the amount, the supplier or who gets paid sends it back for approval.' }) : null,
       editing && existing.info_request ? h('div.item-note', { text: 'Requested: ' + existing.info_request }) : null,
-      section(1, 'What is it?', [typeField, fileField, noDocToggle, noDocField, noDocNoteField]),
+      section(1, 'What is it?', [outletField, typeField, fileField, noDocToggle, noDocField, noDocNoteField]),
       section(2, 'How much?', [amountField, catField, descField]),
       section(3, 'Who gets paid?', [payeeBlock], payeeTitle),
       section(4, editing ? 'Who reviews it' : 'Send to', [sendField], sendTitle),
