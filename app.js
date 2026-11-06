@@ -2743,7 +2743,7 @@
       const filled = function (x) { return Boolean(String(x === undefined || x === null ? '' : x).trim()); };
       return [
         ['outlet_code', !oneOutlet, filled(v.outlet_code)],
-        ['file', true, Boolean(attachment || keptAttachment || extras.length || v.no_doc_reason)],
+        ['file', true, noDocMode() ? Boolean(v.no_doc_reason) : Boolean(attachment || keptAttachment || extras.length || v.no_doc_reason)],
         ['amount_total', true, Number(v.amount_total) > 0],
         ['expense_category', true, filled(v.expense_category)],
         ['description', v.expense_category === 'OTHER', filled(v.description)],
@@ -2949,8 +2949,17 @@
     noDocSelect.addEventListener('change', function () { paintAttachment(); });
     // The reason picker stays out of the way until someone says they have no document.
     let noDocOpen = Boolean(values.no_doc_reason);
-    const noDocToggle = h('button.link.nodoc-toggle', { type: 'button', text: 'No document? Choose a reason instead', onclick: function () { openNoDoc(true); } });
+    const noDocToggle = h('button.link.nodoc-toggle', { type: 'button', text: 'No document, only a QR code? Choose a reason instead', onclick: function () { openNoDoc(true); } });
     function openNoDoc(focus) { noDocOpen = true; paintAttachment(); if (focus) noDocSelect.focus(); }
+    // Back to attaching a document after all.
+    const docAfterAll = h('button.link.nodoc-toggle', { type: 'button', text: 'Have the document after all? Attach it', onclick: function () {
+      noDocOpen = false; set('no_doc_reason', ''); noDocSelect.value = ''; paintAttachment();
+    } });
+    // Without a document, the seller's payment QR code has its own box: there it is never taken for the invoice,
+    // so the same QR can come with every bill of that seller.
+    const qrAdd = h('button.btn.btn-photo', { type: 'button', onclick: function () { extraInput.click(); } }, ['+ Add the payment QR code']);
+    const qrSlot = h('div');
+    const qrField = field('no_doc_qr', 'Payment QR code (optional)', qrSlot, 'If the seller is paid by bank transfer: a photo of their QR code.');
     const dropTitle = h('span.dropzone-title', { text: 'Take or choose a photo' });
     const dropzone = h('button.dropzone', { type: 'button', onclick: function () { fileInput.click(); } }, [
       dropTitle,
@@ -2972,7 +2981,10 @@
     const extrasBox = h('div.preview.extras');
     const addMore = h('button.btn.btn-photo.btn-more', { type: 'button', onclick: function () { extraInput.click(); } }, ['+ Add another file']);
     const addMoreHint = h('p.hint', { text: 'Payment QR code, more pages, delivery note. Photo or PDF, up to ' + MAX_FILES + ' files.' });
-    const fileField = field('file', 'Document (photo or PDF)', h('div', {}, [fileInput, preview, dropzone, extraInput, extrasBox, addMore, addMoreHint]));
+    const fileSlot = h('div', {}, [fileInput, preview, dropzone, extraInput, extrasBox, addMore, addMoreHint]);
+    const fileField = field('file', 'Document (photo or PDF)', fileSlot);
+    /** "No document" chosen and no document attached: the document box makes way for the QR box. */
+    function noDocMode() { return noDocOpen && !attachment && !keptAttachment; }
 
     function paintExtras(status) {
       extrasBox.textContent = '';
@@ -3033,9 +3045,17 @@
       addMore.hidden = !hasDoc || (hasMain ? 1 : 0) + extras.length >= MAX_FILES || status === 'working';
       addMoreHint.hidden = addMore.hidden;
       dropzone.hidden = hasDoc;
-      noDocField.hidden = hasDoc || status === 'working' || !noDocOpen;
+      // No document: the document box is hidden (so nothing is attached in the wrong place) and the files go to the QR box.
+      const noDoc = noDocMode();
+      fileField.hidden = noDoc;
+      qrField.hidden = !noDoc;
+      if (noDoc) { qrSlot.appendChild(extraInput); qrSlot.appendChild(extrasBox); qrSlot.appendChild(qrAdd); }
+      else { fileSlot.insertBefore(extraInput, addMore); fileSlot.insertBefore(extrasBox, addMore); }
+      qrAdd.hidden = extras.length >= MAX_FILES || status === 'working';
+      noDocField.hidden = hasMain || status === 'working' || !noDocOpen;
       noDocNoteField.hidden = noDocField.hidden || values.no_doc_reason !== 'OTHER';
       noDocToggle.hidden = hasDoc || status === 'working' || noDocOpen;
+      docAfterAll.hidden = !noDoc;
       checkRequired();
     }
 
@@ -3405,7 +3425,7 @@
           const p = await filePayload(x);
           payload.extraFiles.push(p.fileRef ? { ref: p.fileRef } : p.file);
         }
-        if (extras.length) payload.no_doc_reason = '';
+        if (extras.length && !noDocMode()) payload.no_doc_reason = '';
         if (!payload.no_doc_reason) payload.no_doc_note = '';
         payload.confirmWarnings = Boolean(confirmWarnings);
         if (editing) { payload.id = existing.expense_id; payload.removeAttachment = removedAttachment && !attachment; }
@@ -3478,7 +3498,7 @@
       editing && existing.status === 'APPROVED' && existing.send_to !== 'ACCOUNTANT'
         ? h('div.item-note', { text: 'Already approved. Changing the amount, the supplier or who gets paid sends it back for approval.' }) : null,
       editing && existing.info_request ? h('div.item-note', { text: 'Requested: ' + existing.info_request }) : null,
-      section(1, 'What is it?', [outletField, typeField, fileField, noDocToggle, noDocField, noDocNoteField]),
+      section(1, 'What is it?', [outletField, typeField, fileField, noDocToggle, noDocField, noDocNoteField, qrField, docAfterAll]),
       section(2, 'How much?', [amountField, catField, descField]),
       section(3, 'Who gets paid?', [payeeBlock], payeeTitle),
       section(4, editing ? 'Who reviews it' : 'Send to', [sendField], sendTitle),
