@@ -2908,6 +2908,11 @@
       const el = h('select.input', { onchange: function () { set(name, el.value); } },
         [h('option', { value: '', text: placeholder || 'Choose…' })].concat(options.map(function (o) { return h('option', { value: o.value, text: o.label }); })));
       el.value = values[name] || '';
+      // Still on its "Choose…" line: grey, like the placeholder of a text box.
+      const paintEmpty = function () { el.classList.toggle('is-empty', !el.value); };
+      el.addEventListener('change', paintEmpty);
+      el.paintEmpty = paintEmpty;
+      paintEmpty();
       return el;
     }
 
@@ -2953,7 +2958,7 @@
     function openNoDoc(focus) { noDocOpen = true; paintAttachment(); if (focus) noDocSelect.focus(); }
     // Back to attaching a document after all.
     const docAfterAll = h('button.link.nodoc-toggle', { type: 'button', text: 'Have the document after all? Attach it', onclick: function () {
-      noDocOpen = false; set('no_doc_reason', ''); noDocSelect.value = ''; paintAttachment();
+      noDocOpen = false; set('no_doc_reason', ''); noDocSelect.value = ''; noDocSelect.paintEmpty(); paintAttachment();
     } });
     // Without a document, the seller's payment QR code has its own box: there it is never taken for the invoice,
     // so the same QR can come with every bill of that seller.
@@ -2984,7 +2989,7 @@
     const fileSlot = h('div', {}, [fileInput, preview, dropzone, extraInput, extrasBox, addMore, addMoreHint]);
     const fileField = field('file', 'Document (photo or PDF)', fileSlot);
     /** "No document" chosen and no document attached: the document box makes way for the QR box. */
-    function noDocMode() { return noDocOpen && !attachment && !keptAttachment; }
+    function noDocMode() { return noDocOpen && Boolean(values.no_doc_reason) && !attachment && !keptAttachment; }
 
     function paintExtras(status) {
       extrasBox.textContent = '';
