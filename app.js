@@ -215,7 +215,7 @@
   const ALL_VIEW_ROLES = ['OWNER', 'ADMIN', 'ACCOUNTANT', 'OUTLET_MANAGER'];
   const EXPORT_MONTH_ROLES = ['OWNER', 'ADMIN', 'ACCOUNTANT'];
   let doneOpen = false;       // the collapsed "Done" list stays open across refreshes
-  const allFilter = { outlet: '', status: 'OPEN', q: '' };
+  const allFilter = { outlet: '', status: 'OPEN', q: '', month: '' };   // month: yyyy-mm the expense was sent, '' = every month
   let payShow = '';           // "Show" dropdown on the Pay tab
   let mineShow = '';          // "Show" dropdown on the Mine tab
   let homeTab = null;
@@ -708,6 +708,7 @@
       if (allFilter.status === 'OPEN' && OPEN.indexOf(e.status) === -1) return false;
       if (allFilter.status && allFilter.status !== 'OPEN' && e.status !== allFilter.status) return false;
       if (q && [e.expense_id, e.description, e.supplier_name, e.submitted_by_name, e.payee_name].join(' ').toLowerCase().indexOf(q) === -1) return false;
+      if (allFilter.month && monthVN(e.created_at) !== allFilter.month) return false;
       return true;
     });
     const total = rows.reduce(function (sum, e) { return sum + (Number(e.amount_total) || 0); }, 0);
@@ -735,7 +736,8 @@
     return [
       h('div.filters', {}, [h('div.grid2', {}, [outletSel, statusSel]), search]),
       rows.length > 1 ? listControls(null) : null,
-      monthExportRow(),
+      // The month box picks which expenses are shown (by the month they were sent); Clear shows every month again.
+      monthExportRow({ month: allFilter.month, onChange: function (m) { allFilter.month = m; shownMore = {}; renderHome(true); } }),
       stats([
         { value: rows.length, label: 'Shown', brand: true },
         { value: fmtShort(total), label: 'Total' },
@@ -2266,10 +2268,21 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
   }
 
-  /** Month-end: every payment of a month with its accounting fields (voids as negative rows). */
-  function monthExportRow() {
-    if (EXPORT_MONTH_ROLES.indexOf(state.user.role) === -1) return null;
-    const month = h('input.input', { type: 'month', 'aria-label': 'Month to export', value: todayVN().slice(0, 7), max: todayVN().slice(0, 7) });
+  /** yyyy-mm of a date as it is in Vietnam. */
+  function monthVN(iso) {
+    if (!iso) return '';
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(iso)).slice(0, 7);
+  }
+
+  /**
+   * Month-end: every payment of a month with its accounting fields (voids as negative rows).
+   * With filter ({month, onChange}) the same box also filters the list it sits on ('' = every month).
+   */
+  function monthExportRow(filter) {
+    if (!filter && EXPORT_MONTH_ROLES.indexOf(state.user.role) === -1) return null;
+    const month = h('input.input', { type: 'month', 'aria-label': filter ? 'Month (filter)' : 'Month to export', value: filter ? filter.month : todayVN().slice(0, 7), max: todayVN().slice(0, 7) });
+    if (filter) month.addEventListener('change', function () { if (month.value === '' || /^\d{4}-\d{2}$/.test(month.value)) filter.onChange(month.value); });
+    if (EXPORT_MONTH_ROLES.indexOf(state.user.role) === -1) return h('div.month-export', {}, [month]);
     const btn = h('button.btn', { type: 'button', text: 'Export month (CSV)' });
     btn.addEventListener('click', async function () {
       if (!/^\d{4}-\d{2}$/.test(month.value)) { toast('Choose a month.'); return; }
